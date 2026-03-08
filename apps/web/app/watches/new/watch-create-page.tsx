@@ -17,7 +17,13 @@ import {
     InputGroupText,
 } from '@pounce/ui/components/input-group';
 import { Label } from '@pounce/ui/components/label';
-import { NativeSelect, NativeSelectOption } from '@pounce/ui/components/native-select';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@pounce/ui/components/select';
 import { Switch } from '@pounce/ui/components/switch';
 import { BellIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -193,51 +199,52 @@ export function WatchCreatePage() {
                         label="Monitor"
                         hint="Choose cheaper prices, restocks, or both."
                     >
-                        <NativeSelect
-                            id="checkType"
+                        <Select
                             value={checkType}
-                            onChange={(e) =>
+                            onValueChange={(v) =>
                                 setCheckType(
-                                    e.target.value as
-                                        | 'price'
-                                        | 'stock'
-                                        | 'both',
+                                    v as 'price' | 'stock' | 'both',
                                 )
                             }
-                            className="w-full"
                         >
-                            <NativeSelectOption value="both">Price Drops + Restocks</NativeSelectOption>
-                            <NativeSelectOption value="price">Price Drops Only</NativeSelectOption>
-                            <NativeSelectOption value="stock">Restocks Only</NativeSelectOption>
-                        </NativeSelect>
+                            <SelectTrigger className="w-full">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="both">Price Drops + Restocks</SelectItem>
+                                <SelectItem value="price">Price Drops Only</SelectItem>
+                                <SelectItem value="stock">Restocks Only</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </Field>
 
                     <Field
                         label="Check frequency"
                         hint="How often Pounce checks this product."
                     >
-                        <NativeSelect
-                            id="checkIntervalSeconds"
-                            value={checkIntervalSeconds}
-                            onChange={(e) =>
-                                setCheckIntervalSeconds(
-                                    Number(e.target.value),
-                                )
+                        <Select
+                            value={String(checkIntervalSeconds)}
+                            onValueChange={(v) =>
+                                setCheckIntervalSeconds(Number(v))
                             }
-                            className="w-full"
                         >
-                            <NativeSelectOption value={5}>Every 5 seconds</NativeSelectOption>
-                            <NativeSelectOption value={10}>Every 10 seconds</NativeSelectOption>
-                            <NativeSelectOption value={30}>Every 30 seconds</NativeSelectOption>
-                            <NativeSelectOption value={60}>Every 1 minute</NativeSelectOption>
-                            <NativeSelectOption value={300}>Every 5 minutes</NativeSelectOption>
-                            <NativeSelectOption value={900}>Every 15 minutes</NativeSelectOption>
-                            <NativeSelectOption value={1800}>Every 30 minutes</NativeSelectOption>
-                            <NativeSelectOption value={3600}>Every 1 hour</NativeSelectOption>
-                            <NativeSelectOption value={21600}>Every 6 hours</NativeSelectOption>
-                            <NativeSelectOption value={43200}>Every 12 hours</NativeSelectOption>
-                            <NativeSelectOption value={86400}>Every 24 hours</NativeSelectOption>
-                        </NativeSelect>
+                            <SelectTrigger className="w-full">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="5">Every 5 seconds</SelectItem>
+                                <SelectItem value="10">Every 10 seconds</SelectItem>
+                                <SelectItem value="30">Every 30 seconds</SelectItem>
+                                <SelectItem value="60">Every 1 minute</SelectItem>
+                                <SelectItem value="300">Every 5 minutes</SelectItem>
+                                <SelectItem value="900">Every 15 minutes</SelectItem>
+                                <SelectItem value="1800">Every 30 minutes</SelectItem>
+                                <SelectItem value="3600">Every 1 hour</SelectItem>
+                                <SelectItem value="21600">Every 6 hours</SelectItem>
+                                <SelectItem value="43200">Every 12 hours</SelectItem>
+                                <SelectItem value="86400">Every 24 hours</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </Field>
 
                     <Field
