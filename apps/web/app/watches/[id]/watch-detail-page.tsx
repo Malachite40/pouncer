@@ -844,7 +844,7 @@ function DropThresholdSection({ watch, onCommit }: {
     onCommit: (fields: Record<string, number | null>) => void;
 }) {
     const [mode, setMode] = useState<ThresholdMode>(
-        watch.priceDropTargetPrice ? 'target' : watch.priceDropPercentThreshold ? 'pct' : 'abs',
+        watch.priceDropThreshold ? 'abs' : watch.priceDropPercentThreshold ? 'pct' : 'target',
     );
 
     return (
@@ -874,7 +874,7 @@ function IncreaseThresholdSection({ watch, onCommit }: {
     onCommit: (fields: Record<string, number | null>) => void;
 }) {
     const [mode, setMode] = useState<ThresholdMode>(
-        watch.priceIncreaseTargetPrice ? 'target' : watch.priceIncreasePercentThreshold ? 'pct' : 'abs',
+        watch.priceIncreaseThreshold ? 'abs' : watch.priceIncreasePercentThreshold ? 'pct' : 'target',
     );
 
     return (

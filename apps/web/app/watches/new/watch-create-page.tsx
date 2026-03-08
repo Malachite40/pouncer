@@ -50,8 +50,8 @@ export function WatchCreatePage() {
     const [priceIncreasePercentThreshold, setPriceIncreasePercentThreshold] = useState('');
     const [priceIncreaseTargetPrice, setPriceIncreaseTargetPrice] = useState('');
     const [notifyCooldownSeconds, setNotifyCooldownSeconds] = useState<string>('none');
-    const [dropMode, setDropMode] = useState<ThresholdMode>('abs');
-    const [increaseMode, setIncreaseMode] = useState<ThresholdMode>('abs');
+    const [dropMode, setDropMode] = useState<ThresholdMode>('target');
+    const [increaseMode, setIncreaseMode] = useState<ThresholdMode>('target');
 
     const createWatch = api.watch.create.useMutation({
         onSuccess: (watch) => {

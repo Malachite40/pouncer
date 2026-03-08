@@ -1,7 +1,14 @@
 import logging
+import os
+import signal
+import subprocess
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+import scrapling.engines.constants as _scrapling_constants
+_scrapling_constants.DEFAULT_ARGS = _scrapling_constants.DEFAULT_ARGS + (
+    "--no-zygote", "--disable-gpu", "--single-process",
+)
 from scrapling.fetchers import DynamicFetcher, Fetcher
 
 from .config import settings
@@ -119,21 +126,41 @@ def _fetch_static_page(url: str) -> dict:
     return {"html": _decode_response_body(response)}
 
 
+def _kill_orphaned_chrome():
+    """Kill chrome processes orphaned to PID 1 (parent died without cleanup)."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", "1", "-f", "chrome-linux/chrome"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for pid_str in result.stdout.strip().split("\n"):
+            if pid_str.strip():
+                try:
+                    os.kill(int(pid_str.strip()), signal.SIGKILL)
+                except (ProcessLookupError, ValueError):
+                    pass
+    except Exception:
+        pass
+
+
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
     wait_selector = _get_wait_selector(url, css_selector)
-    response = DynamicFetcher.fetch(
-        url,
-        headless=True,
-        network_idle=True,
-        load_dom=True,
-        timeout=settings.dynamic_timeout_ms,
-        wait=settings.dynamic_wait_ms,
-        wait_selector=wait_selector,
-        wait_selector_state=settings.dynamic_wait_selector_state,
-        disable_resources=False,
-        google_search=True,
-        locale="en-US",
-    )
+    try:
+        response = DynamicFetcher.fetch(
+            url,
+            headless=True,
+            network_idle=True,
+            load_dom=True,
+            timeout=settings.dynamic_timeout_ms,
+            wait=settings.dynamic_wait_ms,
+            wait_selector=wait_selector,
+            wait_selector_state=settings.dynamic_wait_selector_state,
+            disable_resources=False,
+            google_search=True,
+            locale="en-US",
+        )
+    finally:
+        _kill_orphaned_chrome()
     if response.status >= 400:
         return _error_result(f"HTTP {response.status}: {response.reason}")
 
