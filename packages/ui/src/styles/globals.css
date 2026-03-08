@@ -56,12 +56,15 @@
 
 @keyframes hero-ping {
     0% {
-        transform: translate(-50%, -50%) scale(0.3);
+        scale: 0.3;
+        opacity: 0;
+    }
+    20% {
         opacity: 0.5;
     }
     80%,
     100% {
-        transform: translate(-50%, -50%) scale(3);
+        scale: 3;
         opacity: 0;
     }
 }

@@ -290,6 +290,13 @@ export function showConfirmPanel(
 
         document.body.appendChild(panel);
 
+        // Re-clamp position using actual rendered size so the modal stays in-viewport
+        const actualRect = panel.getBoundingClientRect();
+        const clampedLeft = Math.max(8, Math.min(left, viewportWidth - actualRect.width - 8));
+        const clampedTop = Math.max(8, Math.min(top, viewportHeight - actualRect.height - 8));
+        panel.style.left = `${clampedLeft}px`;
+        panel.style.top = `${clampedTop}px`;
+
         // Focus name input
         setTimeout(() => nameInput.focus(), 50);
     });
