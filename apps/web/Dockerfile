@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: Install dependencies
 # ============================================================
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
@@ -17,7 +17,7 @@ RUN npm ci
 # ============================================================
 # Stage 2: Build
 # ============================================================
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
@@ -34,7 +34,7 @@ RUN npm run build -w web
 # ============================================================
 # Stage 3: Run
 # ============================================================
-FROM node:20-alpine AS run
+FROM node:22-alpine AS run
 WORKDIR /app
 
 ENV NODE_ENV=production

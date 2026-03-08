@@ -4,21 +4,33 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { nextCookies } from 'better-auth/next-js';
 
-const db = getDb();
+let _auth: ReturnType<typeof betterAuth> | undefined;
 
-export const auth = betterAuth({
-    secret: process.env.BETTER_AUTH_SECRET,
-    baseURL: process.env.BETTER_AUTH_URL,
-    database: drizzleAdapter(db, {
-        provider: 'pg',
-        schema,
-    }),
-    socialProviders: {
-        google: {
-            clientId: process.env.GOOGLE_CLIENT_ID!,
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-        },
+function getAuth() {
+    if (!_auth) {
+        const db = getDb();
+        _auth = betterAuth({
+            secret: process.env.BETTER_AUTH_SECRET,
+            baseURL: process.env.BETTER_AUTH_URL,
+            database: drizzleAdapter(db, {
+                provider: 'pg',
+                schema,
+            }),
+            socialProviders: {
+                google: {
+                    clientId: process.env.GOOGLE_CLIENT_ID!,
+                    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+                },
+            },
+            trustedOrigins: ['chrome-extension://*'],
+            plugins: [nextCookies()],
+        });
+    }
+    return _auth;
+}
+
+export const auth = new Proxy({} as ReturnType<typeof betterAuth>, {
+    get(_target, prop, receiver) {
+        return Reflect.get(getAuth(), prop, receiver);
     },
-    trustedOrigins: ['chrome-extension://*'],
-    plugins: [nextCookies()],
 });
