@@ -10,6 +10,8 @@ export const redisConnection = (() => {
     return {
         host: parsed.hostname,
         port: Number(parsed.port) || 6379,
+        ...(parsed.password && { password: decodeURIComponent(parsed.password) }),
+        ...(parsed.username && { username: decodeURIComponent(parsed.username) }),
     };
 })();
 

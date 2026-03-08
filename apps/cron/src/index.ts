@@ -1,5 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import 'dotenv/config';
 
 import { getDb } from '@pounce/db';
 import { watches } from '@pounce/db/schema';
