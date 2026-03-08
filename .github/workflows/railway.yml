@@ -1,0 +1,39 @@
+name: Pre Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Migrations
+        run: npm run db:migrate
+        working-directory: ./packages/db
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Ensure Railway CLI is available
+        run: npx --package @railway/cli railway --version
+
+      - name: Deploy Repository
+        run: |
+          npx --package @railway/cli railway up -d -s "web"
+          npx --package @railway/cli railway up -d -s "scraper"
+          npx --package @railway/cli railway up -d -s "cron"
+          npx --package @railway/cli railway up -d -s "queue"
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
