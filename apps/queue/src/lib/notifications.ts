@@ -32,6 +32,7 @@ export async function sendTelegramNotification(
                 chat_id: chatId,
                 text: message,
                 parse_mode: 'HTML',
+                disable_web_page_preview: true,
             }),
         });
     } catch (error) {

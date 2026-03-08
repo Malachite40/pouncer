@@ -25,9 +25,11 @@ import {
     SelectValue,
 } from '@pounce/ui/components/select';
 import { Switch } from '@pounce/ui/components/switch';
-import { BellIcon } from 'lucide-react';
+import { BellIcon, CrosshairIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useState } from 'react';
+
+type ThresholdMode = 'abs' | 'pct' | 'target';
 
 export function WatchCreatePage() {
     const router = useRouter();
@@ -38,9 +40,18 @@ export function WatchCreatePage() {
     );
     const [checkIntervalSeconds, setCheckIntervalSeconds] = useState(900);
     const [cssSelector, setCssSelector] = useState('');
-    const [notifyPrice, setNotifyPrice] = useState(true);
+    const [notifyPriceDrop, setNotifyPriceDrop] = useState(true);
+    const [notifyPriceIncrease, setNotifyPriceIncrease] = useState(true);
     const [notifyStock, setNotifyStock] = useState(true);
-    const [priceThreshold, setPriceThreshold] = useState('');
+    const [priceDropThreshold, setPriceDropThreshold] = useState('');
+    const [priceDropPercentThreshold, setPriceDropPercentThreshold] = useState('');
+    const [priceDropTargetPrice, setPriceDropTargetPrice] = useState('');
+    const [priceIncreaseThreshold, setPriceIncreaseThreshold] = useState('');
+    const [priceIncreasePercentThreshold, setPriceIncreasePercentThreshold] = useState('');
+    const [priceIncreaseTargetPrice, setPriceIncreaseTargetPrice] = useState('');
+    const [notifyCooldownSeconds, setNotifyCooldownSeconds] = useState<string>('none');
+    const [dropMode, setDropMode] = useState<ThresholdMode>('abs');
+    const [increaseMode, setIncreaseMode] = useState<ThresholdMode>('abs');
 
     const createWatch = api.watch.create.useMutation({
         onSuccess: (watch) => {
@@ -90,11 +101,16 @@ export function WatchCreatePage() {
                             checkType,
                             cssSelector: cssSelector || null,
                             checkIntervalSeconds,
-                            notifyPrice,
+                            notifyPriceDrop,
+                            notifyPriceIncrease,
                             notifyStock,
-                            priceThreshold: priceThreshold
-                                ? Number(priceThreshold)
-                                : null,
+                            priceDropThreshold: priceDropThreshold ? Number(priceDropThreshold) : null,
+                            priceDropPercentThreshold: priceDropPercentThreshold ? Number(priceDropPercentThreshold) : null,
+                            priceDropTargetPrice: priceDropTargetPrice ? Number(priceDropTargetPrice) : null,
+                            priceIncreaseThreshold: priceIncreaseThreshold ? Number(priceIncreaseThreshold) : null,
+                            priceIncreasePercentThreshold: priceIncreasePercentThreshold ? Number(priceIncreasePercentThreshold) : null,
+                            priceIncreaseTargetPrice: priceIncreaseTargetPrice ? Number(priceIncreaseTargetPrice) : null,
+                            notifyCooldownSeconds: notifyCooldownSeconds !== 'none' ? Number(notifyCooldownSeconds) : null,
                         });
                     }}
                 >
@@ -103,7 +119,7 @@ export function WatchCreatePage() {
                             <DialogTrigger asChild>
                                 <Button variant="ghost" size="icon" className="relative size-8">
                                     <BellIcon className="size-4" />
-                                    {(!notifyPrice || !notifyStock || priceThreshold) ? (
+                                    {(!notifyPriceDrop || !notifyPriceIncrease || !notifyStock || priceDropThreshold || priceDropPercentThreshold || priceDropTargetPrice || priceIncreaseThreshold || priceIncreasePercentThreshold || priceIncreaseTargetPrice || (notifyCooldownSeconds !== 'none')) ? (
                                         <span className="absolute top-1 right-1 size-2 rounded-full bg-primary" />
                                     ) : null}
                                     <span className="sr-only">Notification preferences</span>
@@ -115,44 +131,53 @@ export function WatchCreatePage() {
                                 </DialogHeader>
                                 <div className="space-y-4">
                                     <div className="flex items-center justify-between gap-3">
-                                        <Label htmlFor="notifyPrice" className="text-sm font-medium text-foreground">
-                                            Notify on price change
+                                        <Label htmlFor="notifyPriceDrop" className="text-sm font-medium text-foreground">
+                                            Notify on price drop
                                         </Label>
                                         <Switch
-                                            id="notifyPrice"
-                                            checked={notifyPrice}
-                                            onCheckedChange={setNotifyPrice}
+                                            id="notifyPriceDrop"
+                                            checked={notifyPriceDrop}
+                                            onCheckedChange={setNotifyPriceDrop}
                                         />
                                     </div>
-                                    {notifyPrice ? (
-                                        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/30 p-3">
-                                            <div className="flex items-baseline justify-between gap-3">
-                                                <span className="text-sm font-medium text-foreground">
-                                                    Price drop threshold
-                                                </span>
-                                                <span className="text-[11px] tracking-[0.12em] text-muted-foreground">
-                                                    Only notify if price drops by at least this amount.
-                                                </span>
+                                    {notifyPriceDrop ? (
+                                        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 p-3">
+                                            <div className="flex items-center gap-2">
+                                                <ModeToggle mode={dropMode} onModeChange={(m) => { setDropMode(m); if (m === 'abs') { setPriceDropPercentThreshold(''); setPriceDropTargetPrice(''); } else if (m === 'pct') { setPriceDropThreshold(''); setPriceDropTargetPrice(''); } else { setPriceDropThreshold(''); setPriceDropPercentThreshold(''); } }} />
+                                                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Price Drop Alerts</span>
                                             </div>
-                                            <InputGroup className="bg-background">
-                                                <InputGroupAddon>
-                                                    <InputGroupText>$</InputGroupText>
-                                                </InputGroupAddon>
-                                                <InputGroupInput
-                                                    id="priceThreshold"
-                                                    type="number"
-                                                    min="0.01"
-                                                    step="0.01"
-                                                    placeholder="0.00"
-                                                    value={priceThreshold}
-                                                    onChange={(e) =>
-                                                        setPriceThreshold(e.target.value)
-                                                    }
-                                                />
-                                                <InputGroupAddon align="inline-end">
-                                                    <InputGroupText>USD</InputGroupText>
-                                                </InputGroupAddon>
-                                            </InputGroup>
+                                            {dropMode === 'abs' ? (
+                                                <ThresholdField label="Min change" hint="Skip drops smaller than this" prefix="$" placeholder="0.00" value={priceDropThreshold} onChange={setPriceDropThreshold} />
+                                            ) : dropMode === 'pct' ? (
+                                                <ThresholdField label="Min change" hint="Skip drops smaller than this" suffix="%" placeholder="0" value={priceDropPercentThreshold} onChange={setPriceDropPercentThreshold} />
+                                            ) : (
+                                                <ThresholdField label="Target price" hint="Only alert when price is at or below this" prefix="$" placeholder="0.00" value={priceDropTargetPrice} onChange={setPriceDropTargetPrice} />
+                                            )}
+                                        </div>
+                                    ) : null}
+                                    <div className="flex items-center justify-between gap-3">
+                                        <Label htmlFor="notifyPriceIncrease" className="text-sm font-medium text-foreground">
+                                            Notify on price increase
+                                        </Label>
+                                        <Switch
+                                            id="notifyPriceIncrease"
+                                            checked={notifyPriceIncrease}
+                                            onCheckedChange={setNotifyPriceIncrease}
+                                        />
+                                    </div>
+                                    {notifyPriceIncrease ? (
+                                        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 p-3">
+                                            <div className="flex items-center gap-2">
+                                                <ModeToggle mode={increaseMode} onModeChange={(m) => { setIncreaseMode(m); if (m === 'abs') { setPriceIncreasePercentThreshold(''); setPriceIncreaseTargetPrice(''); } else if (m === 'pct') { setPriceIncreaseThreshold(''); setPriceIncreaseTargetPrice(''); } else { setPriceIncreaseThreshold(''); setPriceIncreasePercentThreshold(''); } }} />
+                                                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Price Increase Alerts</span>
+                                            </div>
+                                            {increaseMode === 'abs' ? (
+                                                <ThresholdField label="Min change" hint="Skip increases smaller than this" prefix="$" placeholder="0.00" value={priceIncreaseThreshold} onChange={setPriceIncreaseThreshold} />
+                                            ) : increaseMode === 'pct' ? (
+                                                <ThresholdField label="Min change" hint="Skip increases smaller than this" suffix="%" placeholder="0" value={priceIncreasePercentThreshold} onChange={setPriceIncreasePercentThreshold} />
+                                            ) : (
+                                                <ThresholdField label="Target price" hint="Only alert when price is at or above this" prefix="$" placeholder="0.00" value={priceIncreaseTargetPrice} onChange={setPriceIncreaseTargetPrice} />
+                                            )}
                                         </div>
                                     ) : null}
                                     <div className="flex items-center justify-between gap-3">
@@ -164,6 +189,26 @@ export function WatchCreatePage() {
                                             checked={notifyStock}
                                             onCheckedChange={setNotifyStock}
                                         />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex items-baseline justify-between gap-3">
+                                            <span className="text-sm font-medium text-foreground">Cooldown</span>
+                                            <span className="text-[11px] tracking-[0.12em] text-muted-foreground">Min time between alerts.</span>
+                                        </div>
+                                        <Select value={notifyCooldownSeconds} onValueChange={setNotifyCooldownSeconds}>
+                                            <SelectTrigger className="w-full">
+                                                <SelectValue placeholder="None" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="none">None</SelectItem>
+                                                <SelectItem value="900">15 minutes</SelectItem>
+                                                <SelectItem value="1800">30 minutes</SelectItem>
+                                                <SelectItem value="3600">1 hour</SelectItem>
+                                                <SelectItem value="21600">6 hours</SelectItem>
+                                                <SelectItem value="43200">12 hours</SelectItem>
+                                                <SelectItem value="86400">24 hours</SelectItem>
+                                            </SelectContent>
+                                        </Select>
                                     </div>
                                 </div>
                             </DialogContent>
@@ -301,6 +346,70 @@ function Field({
                 </span>
             </div>
             {children}
+        </div>
+    );
+}
+
+function ThresholdField({
+    label,
+    hint,
+    prefix,
+    suffix,
+    placeholder,
+    value,
+    onChange,
+}: {
+    label: string;
+    hint?: string;
+    prefix?: string;
+    suffix?: string;
+    placeholder: string;
+    value: string;
+    onChange: (value: string) => void;
+}) {
+    return (
+        <div className="min-w-0 flex-1 space-y-1">
+            <span className="text-[11px] tracking-[0.1em] text-muted-foreground">{label}</span>
+            {hint ? <span className="block text-[10px] text-muted-foreground/70">{hint}</span> : null}
+            <InputGroup className="bg-background">
+                {prefix ? (
+                    <InputGroupAddon>
+                        <InputGroupText>{prefix}</InputGroupText>
+                    </InputGroupAddon>
+                ) : null}
+                <InputGroupInput
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    placeholder={placeholder}
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                />
+                {suffix ? (
+                    <InputGroupAddon align="inline-end">
+                        <InputGroupText>{suffix}</InputGroupText>
+                    </InputGroupAddon>
+                ) : null}
+            </InputGroup>
+        </div>
+    );
+}
+
+function ModeToggle({ mode, onModeChange }: { mode: ThresholdMode; onModeChange: (mode: ThresholdMode) => void }) {
+    const btn = (value: ThresholdMode, children: ReactNode) => (
+        <button
+            type="button"
+            className={`flex items-center justify-center px-2 py-1.5 text-xs font-medium transition-colors ${mode === value ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground'}`}
+            onClick={() => onModeChange(value)}
+        >
+            {children}
+        </button>
+    );
+    return (
+        <div className="flex shrink-0 overflow-hidden rounded-md border border-border/60">
+            {btn('abs', '$')}
+            {btn('pct', '%')}
+            {btn('target', <CrosshairIcon className="size-3.5" />)}
         </div>
     );
 }

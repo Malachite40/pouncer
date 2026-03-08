@@ -8,46 +8,133 @@ interface BuildNotificationsInput {
     stockStatus: string | null;
 }
 
+function shouldNotifyForDrop(
+    watch: WatchRecord,
+    previousPrice: number,
+    currentPrice: number,
+): boolean {
+    const targetPrice = watch.priceDropTargetPrice
+        ? Number.parseFloat(watch.priceDropTargetPrice)
+        : null;
+    if (targetPrice !== null && currentPrice > targetPrice) {
+        return false;
+    }
+
+    const absThreshold = watch.priceDropThreshold
+        ? Number.parseFloat(watch.priceDropThreshold)
+        : null;
+    const pctThreshold = watch.priceDropPercentThreshold
+        ? Number.parseFloat(watch.priceDropPercentThreshold)
+        : null;
+
+    if (absThreshold === null && pctThreshold === null) {
+        return true;
+    }
+
+    const absoluteDelta = previousPrice - currentPrice;
+    const percentDelta =
+        previousPrice !== 0 ? (absoluteDelta / previousPrice) * 100 : 0;
+
+    if (absThreshold !== null && absoluteDelta >= absThreshold) return true;
+    if (pctThreshold !== null && percentDelta >= pctThreshold) return true;
+
+    return false;
+}
+
+function shouldNotifyForIncrease(
+    watch: WatchRecord,
+    previousPrice: number,
+    currentPrice: number,
+): boolean {
+    const targetPrice = watch.priceIncreaseTargetPrice
+        ? Number.parseFloat(watch.priceIncreaseTargetPrice)
+        : null;
+    if (targetPrice !== null && currentPrice < targetPrice) {
+        return false;
+    }
+
+    const absThreshold = watch.priceIncreaseThreshold
+        ? Number.parseFloat(watch.priceIncreaseThreshold)
+        : null;
+    const pctThreshold = watch.priceIncreasePercentThreshold
+        ? Number.parseFloat(watch.priceIncreasePercentThreshold)
+        : null;
+
+    if (absThreshold === null && pctThreshold === null) {
+        return true;
+    }
+
+    const absoluteDelta = currentPrice - previousPrice;
+    const percentDelta =
+        previousPrice !== 0 ? (absoluteDelta / previousPrice) * 100 : 0;
+
+    if (absThreshold !== null && absoluteDelta >= absThreshold) return true;
+    if (pctThreshold !== null && percentDelta >= pctThreshold) return true;
+
+    return false;
+}
+
 export function buildWatchNotifications({
     watch,
     price,
     stockStatus,
 }: BuildNotificationsInput) {
     const notifications: string[] = [];
-    const shouldNotifyPrice = watch.notifyPrice;
-    const shouldNotifyStock = watch.notifyStock;
 
-    if (shouldNotifyPrice && price !== null && watch.lastPrice !== null) {
+    if (price !== null && watch.lastPrice !== null) {
         const previousPrice = Number.parseFloat(watch.lastPrice);
 
         if (price !== previousPrice) {
-            const drop = previousPrice - price;
-            const threshold = watch.priceThreshold
-                ? Number.parseFloat(watch.priceThreshold)
-                : null;
+            if (price < previousPrice && watch.notifyPriceDrop) {
+                if (shouldNotifyForDrop(watch, previousPrice, price)) {
+                    const drop = previousPrice - price;
+                    const pct =
+                        previousPrice !== 0
+                            ? Math.round((drop / previousPrice) * 100)
+                            : 0;
 
-            if (price < previousPrice && threshold !== null && drop < threshold) {
-                // Drop is below threshold — skip
-            } else {
-                notifications.push(
-                    price < previousPrice
-                        ? `<b>Price Drop!</b> ${watch.name}\n$${previousPrice.toFixed(2)} → $${price.toFixed(2)}\n${watch.url}`
-                        : `<b>Price Increase</b> ${watch.name}\n$${previousPrice.toFixed(2)} → $${price.toFixed(2)}\n${watch.url}`,
-                );
+                    let message = `🟢 <b>Price Drop!</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>\n$${previousPrice.toFixed(2)} → <b>$${price.toFixed(2)}</b> (-$${drop.toFixed(2)} · ${pct}% off)`;
+
+                    const targetPrice = watch.priceDropTargetPrice
+                        ? Number.parseFloat(watch.priceDropTargetPrice)
+                        : null;
+                    if (targetPrice !== null && price <= targetPrice) {
+                        message += `\n✅ Below target price $${targetPrice.toFixed(2)}`;
+                    }
+                    notifications.push(message);
+                }
+            } else if (watch.notifyPriceIncrease) {
+                if (shouldNotifyForIncrease(watch, previousPrice, price)) {
+                    const increase = price - previousPrice;
+                    const pct =
+                        previousPrice !== 0
+                            ? Math.round((increase / previousPrice) * 100)
+                            : 0;
+
+                    let message = `🔴 <b>Price Increase</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>\n$${previousPrice.toFixed(2)} → <b>$${price.toFixed(2)}</b> (+$${increase.toFixed(2)} · ${pct}% up)`;
+
+                    const targetPrice = watch.priceIncreaseTargetPrice
+                        ? Number.parseFloat(watch.priceIncreaseTargetPrice)
+                        : null;
+                    if (targetPrice !== null && price >= targetPrice) {
+                        message += `\n⚠️ Above target price $${targetPrice.toFixed(2)}`;
+                    }
+                    notifications.push(message);
+                }
             }
         }
     }
 
     if (
-        shouldNotifyStock &&
+        watch.notifyStock &&
         stockStatus &&
         watch.lastStockStatus &&
         stockStatus !== watch.lastStockStatus
     ) {
         notifications.push(
             stockStatus === 'in_stock'
-                ? `<b>Back in Stock!</b> ${watch.name}\n${watch.url}`
-                : `<b>Out of Stock</b> ${watch.name}\n${watch.url}`,
+                ? `🟢 <b>Back in Stock!</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`
+                : `⚪ <b>Out of Stock</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`,
         );
     }
 

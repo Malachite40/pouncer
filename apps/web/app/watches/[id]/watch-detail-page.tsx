@@ -34,6 +34,13 @@ import {
     InputGroupText,
 } from '@pounce/ui/components/input-group';
 import { Label } from '@pounce/ui/components/label';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@pounce/ui/components/select';
 import { PriceHistoryChart } from '@pounce/ui/components/price-history-chart';
 import { Switch } from '@pounce/ui/components/switch';
 import {
@@ -47,6 +54,7 @@ import {
 import {
     BellIcon,
     CheckIcon,
+    CrosshairIcon,
     EllipsisVerticalIcon,
     ExternalLinkIcon,
     PauseIcon,
@@ -134,13 +142,17 @@ export function WatchDetailPage() {
             const previous = utils.watch.get.getData({ id: id ?? '' });
             utils.watch.get.setData({ id: id ?? '' }, (old) => {
                 if (!old) return old;
+                const { priceDropThreshold, priceDropPercentThreshold, priceDropTargetPrice, priceIncreaseThreshold, priceIncreasePercentThreshold, priceIncreaseTargetPrice, notifyCooldownSeconds, ...rest } = input;
                 return {
                     ...old,
-                    ...input,
-                    priceThreshold:
-                        'priceThreshold' in input
-                            ? (input.priceThreshold?.toString() ?? null)
-                            : old.priceThreshold,
+                    ...rest,
+                    ...(priceDropThreshold !== undefined && { priceDropThreshold: priceDropThreshold?.toString() ?? null }),
+                    ...(priceDropPercentThreshold !== undefined && { priceDropPercentThreshold: priceDropPercentThreshold?.toString() ?? null }),
+                    ...(priceDropTargetPrice !== undefined && { priceDropTargetPrice: priceDropTargetPrice?.toString() ?? null }),
+                    ...(priceIncreaseThreshold !== undefined && { priceIncreaseThreshold: priceIncreaseThreshold?.toString() ?? null }),
+                    ...(priceIncreasePercentThreshold !== undefined && { priceIncreasePercentThreshold: priceIncreasePercentThreshold?.toString() ?? null }),
+                    ...(priceIncreaseTargetPrice !== undefined && { priceIncreaseTargetPrice: priceIncreaseTargetPrice?.toString() ?? null }),
+                    ...(notifyCooldownSeconds !== undefined && { notifyCooldownSeconds: notifyCooldownSeconds ?? null }),
                 };
             });
             return { previous };
@@ -266,9 +278,16 @@ export function WatchDetailPage() {
                                                 className="relative bg-background"
                                             >
                                                 <EllipsisVerticalIcon className="size-4" />
-                                                {!watch.notifyPrice ||
+                                                {!watch.notifyPriceDrop ||
+                                                !watch.notifyPriceIncrease ||
                                                 !watch.notifyStock ||
-                                                watch.priceThreshold ? (
+                                                watch.priceDropThreshold ||
+                                                watch.priceDropPercentThreshold ||
+                                                watch.priceDropTargetPrice ||
+                                                watch.priceIncreaseThreshold ||
+                                                watch.priceIncreasePercentThreshold ||
+                                                watch.priceIncreaseTargetPrice ||
+                                                watch.notifyCooldownSeconds ? (
                                                     <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary" />
                                                 ) : null}
                                                 <span className="sr-only">
@@ -370,9 +389,16 @@ export function WatchDetailPage() {
                                             >
                                                 <BellIcon />
                                                 Notifications
-                                                {!watch.notifyPrice ||
+                                                {!watch.notifyPriceDrop ||
+                                                !watch.notifyPriceIncrease ||
                                                 !watch.notifyStock ||
-                                                watch.priceThreshold ? (
+                                                watch.priceDropThreshold ||
+                                                watch.priceDropPercentThreshold ||
+                                                watch.priceDropTargetPrice ||
+                                                watch.priceIncreaseThreshold ||
+                                                watch.priceIncreasePercentThreshold ||
+                                                watch.priceIncreaseTargetPrice ||
+                                                watch.notifyCooldownSeconds ? (
                                                     <span className="ml-auto size-2 rounded-full bg-primary" />
                                                 ) : null}
                                             </DropdownMenuItem>
@@ -567,31 +593,50 @@ export function WatchDetailPage() {
                         <div className="space-y-4">
                             <div className="flex items-center justify-between gap-3">
                                 <Label
-                                    htmlFor="detail-notify-price"
+                                    htmlFor="detail-notify-price-drop"
                                     className="text-sm font-medium text-foreground"
                                 >
-                                    Notify on price change
+                                    Notify on price drop
                                 </Label>
                                 <Switch
-                                    id="detail-notify-price"
-                                    checked={watch.notifyPrice}
+                                    id="detail-notify-price-drop"
+                                    checked={watch.notifyPriceDrop}
                                     onCheckedChange={(checked) =>
                                         toggleActive.mutate({
                                             id,
-                                            notifyPrice: checked,
+                                            notifyPriceDrop: checked,
                                         })
                                     }
                                 />
                             </div>
-                            {watch.notifyPrice ? (
-                                <ThresholdInput
-                                    value={watch.priceThreshold}
-                                    onCommit={(value) =>
+                            {watch.notifyPriceDrop ? (
+                                <DropThresholdSection
+                                    watch={watch}
+                                    onCommit={(fields) => toggleActive.mutate({ id, ...fields })}
+                                />
+                            ) : null}
+                            <div className="flex items-center justify-between gap-3">
+                                <Label
+                                    htmlFor="detail-notify-price-increase"
+                                    className="text-sm font-medium text-foreground"
+                                >
+                                    Notify on price increase
+                                </Label>
+                                <Switch
+                                    id="detail-notify-price-increase"
+                                    checked={watch.notifyPriceIncrease}
+                                    onCheckedChange={(checked) =>
                                         toggleActive.mutate({
                                             id,
-                                            priceThreshold: value,
+                                            notifyPriceIncrease: checked,
                                         })
                                     }
+                                />
+                            </div>
+                            {watch.notifyPriceIncrease ? (
+                                <IncreaseThresholdSection
+                                    watch={watch}
+                                    onCommit={(fields) => toggleActive.mutate({ id, ...fields })}
                                 />
                             ) : null}
                             <div className="flex items-center justify-between gap-3">
@@ -611,6 +656,34 @@ export function WatchDetailPage() {
                                         })
                                     }
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <div className="flex items-baseline justify-between gap-3">
+                                    <span className="text-sm font-medium text-foreground">Cooldown</span>
+                                    <span className="text-[11px] tracking-[0.12em] text-muted-foreground">Min time between alerts.</span>
+                                </div>
+                                <Select
+                                    value={String(watch.notifyCooldownSeconds ?? 'none')}
+                                    onValueChange={(v) =>
+                                        toggleActive.mutate({
+                                            id,
+                                            notifyCooldownSeconds: v === 'none' ? null : Number(v),
+                                        })
+                                    }
+                                >
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue placeholder="None" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="none">None</SelectItem>
+                                        <SelectItem value="900">15 minutes</SelectItem>
+                                        <SelectItem value="1800">30 minutes</SelectItem>
+                                        <SelectItem value="3600">1 hour</SelectItem>
+                                        <SelectItem value="21600">6 hours</SelectItem>
+                                        <SelectItem value="43200">12 hours</SelectItem>
+                                        <SelectItem value="86400">24 hours</SelectItem>
+                                    </SelectContent>
+                                </Select>
                             </div>
                         </div>
                     </DialogContent>
@@ -745,10 +818,99 @@ function formatTimePart(value: Date | string) {
     });
 }
 
+type ThresholdMode = 'abs' | 'pct' | 'target';
+
+function ModeToggle({ mode, onModeChange }: { mode: ThresholdMode; onModeChange: (mode: ThresholdMode) => void }) {
+    const btn = (value: ThresholdMode, children: React.ReactNode) => (
+        <button
+            type="button"
+            className={`flex items-center justify-center px-2 py-1.5 text-xs font-medium transition-colors ${mode === value ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground'}`}
+            onClick={() => onModeChange(value)}
+        >
+            {children}
+        </button>
+    );
+    return (
+        <div className="flex shrink-0 overflow-hidden rounded-md border border-border/60">
+            {btn('abs', '$')}
+            {btn('pct', '%')}
+            {btn('target', <CrosshairIcon className="size-3.5" />)}
+        </div>
+    );
+}
+
+function DropThresholdSection({ watch, onCommit }: {
+    watch: { priceDropThreshold: string | null; priceDropPercentThreshold: string | null; priceDropTargetPrice: string | null };
+    onCommit: (fields: Record<string, number | null>) => void;
+}) {
+    const [mode, setMode] = useState<ThresholdMode>(
+        watch.priceDropTargetPrice ? 'target' : watch.priceDropPercentThreshold ? 'pct' : 'abs',
+    );
+
+    return (
+        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center gap-2">
+                <ModeToggle mode={mode} onModeChange={(m) => {
+                    setMode(m);
+                    if (m === 'abs') onCommit({ priceDropPercentThreshold: null, priceDropTargetPrice: null });
+                    else if (m === 'pct') onCommit({ priceDropThreshold: null, priceDropTargetPrice: null });
+                    else onCommit({ priceDropThreshold: null, priceDropPercentThreshold: null });
+                }} />
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Price Drop Alerts</span>
+            </div>
+            {mode === 'abs' ? (
+                <ThresholdInput label="Min change" hint="Skip drops smaller than this" prefix="$" value={watch.priceDropThreshold} onCommit={(v) => onCommit({ priceDropThreshold: v })} />
+            ) : mode === 'pct' ? (
+                <ThresholdInput label="Min change" hint="Skip drops smaller than this" suffix="%" value={watch.priceDropPercentThreshold} onCommit={(v) => onCommit({ priceDropPercentThreshold: v })} />
+            ) : (
+                <ThresholdInput label="Target price" hint="Only alert when price is at or below this" prefix="$" value={watch.priceDropTargetPrice} onCommit={(v) => onCommit({ priceDropTargetPrice: v })} />
+            )}
+        </div>
+    );
+}
+
+function IncreaseThresholdSection({ watch, onCommit }: {
+    watch: { priceIncreaseThreshold: string | null; priceIncreasePercentThreshold: string | null; priceIncreaseTargetPrice: string | null };
+    onCommit: (fields: Record<string, number | null>) => void;
+}) {
+    const [mode, setMode] = useState<ThresholdMode>(
+        watch.priceIncreaseTargetPrice ? 'target' : watch.priceIncreasePercentThreshold ? 'pct' : 'abs',
+    );
+
+    return (
+        <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center gap-2">
+                <ModeToggle mode={mode} onModeChange={(m) => {
+                    setMode(m);
+                    if (m === 'abs') onCommit({ priceIncreasePercentThreshold: null, priceIncreaseTargetPrice: null });
+                    else if (m === 'pct') onCommit({ priceIncreaseThreshold: null, priceIncreaseTargetPrice: null });
+                    else onCommit({ priceIncreaseThreshold: null, priceIncreasePercentThreshold: null });
+                }} />
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Price Increase Alerts</span>
+            </div>
+            {mode === 'abs' ? (
+                <ThresholdInput label="Min change" hint="Skip increases smaller than this" prefix="$" value={watch.priceIncreaseThreshold} onCommit={(v) => onCommit({ priceIncreaseThreshold: v })} />
+            ) : mode === 'pct' ? (
+                <ThresholdInput label="Min change" hint="Skip increases smaller than this" suffix="%" value={watch.priceIncreasePercentThreshold} onCommit={(v) => onCommit({ priceIncreasePercentThreshold: v })} />
+            ) : (
+                <ThresholdInput label="Target price" hint="Only alert when price is at or above this" prefix="$" value={watch.priceIncreaseTargetPrice} onCommit={(v) => onCommit({ priceIncreaseTargetPrice: v })} />
+            )}
+        </div>
+    );
+}
+
 function ThresholdInput({
+    label,
+    hint,
+    prefix,
+    suffix,
     value,
     onCommit,
 }: {
+    label: string;
+    hint?: string;
+    prefix?: string;
+    suffix?: string;
     value: string | null;
     onCommit: (value: number | null) => void;
 }) {
@@ -759,19 +921,15 @@ function ThresholdInput({
     }, [value]);
 
     return (
-        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/30 p-3">
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
-                <span className="text-sm font-medium text-foreground">
-                    Price drop threshold
-                </span>
-                <span className="text-[11px] tracking-[0.12em] text-muted-foreground">
-                    Min drop to notify.
-                </span>
-            </div>
+        <div className="min-w-0 flex-1 space-y-1">
+            <span className="text-[11px] tracking-[0.1em] text-muted-foreground">{label}</span>
+            {hint ? <span className="block text-[10px] text-muted-foreground/70">{hint}</span> : null}
             <InputGroup className="bg-background">
-                <InputGroupAddon>
-                    <InputGroupText>$</InputGroupText>
-                </InputGroupAddon>
+                {prefix ? (
+                    <InputGroupAddon>
+                        <InputGroupText>{prefix}</InputGroupText>
+                    </InputGroupAddon>
+                ) : null}
                 <InputGroupInput
                     type="number"
                     min="0.01"
@@ -793,9 +951,11 @@ function ThresholdInput({
                         }
                     }}
                 />
-                <InputGroupAddon align="inline-end">
-                    <InputGroupText>USD</InputGroupText>
-                </InputGroupAddon>
+                {suffix ? (
+                    <InputGroupAddon align="inline-end">
+                        <InputGroupText>{suffix}</InputGroupText>
+                    </InputGroupAddon>
+                ) : null}
             </InputGroup>
         </div>
     );

@@ -281,7 +281,7 @@ export function PriceHistoryChart({
                                         ? formatTooltipDate(point.checkedAt)
                                         : '';
                                 }}
-                                formatter={(value, name) => {
+                                formatter={(value, name, item) => {
                                     if (value === 0) return null;
                                     if (name === 'Price') {
                                         return (
@@ -296,10 +296,11 @@ export function PriceHistoryChart({
                                         );
                                     }
 
+                                    const point = item?.payload as { stockFill?: string } | undefined;
                                     const label =
-                                        name === 'In Stock'
-                                            ? 'In stock'
-                                            : 'Out of stock';
+                                        point?.stockFill === 'var(--color-outOfStock)'
+                                            ? 'Out of stock'
+                                            : 'In stock';
 
                                     return (
                                         <div className="flex flex-1 items-center justify-between gap-4 leading-none">

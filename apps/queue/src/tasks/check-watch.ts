@@ -62,8 +62,23 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
         stockStatus,
     });
 
-    for (const notification of notifications) {
-        await sendTelegramNotification(payload.userId, notification);
+    let notificationsSent = 0;
+    const now = new Date();
+
+    if (notifications.length > 0) {
+        const cooldown = watch.notifyCooldownSeconds;
+        const lastNotified = watch.lastNotifiedAt;
+        const cooldownElapsed =
+            !cooldown ||
+            !lastNotified ||
+            now.getTime() - lastNotified.getTime() >= cooldown * 1000;
+
+        if (cooldownElapsed || payload.manual) {
+            for (const notification of notifications) {
+                await sendTelegramNotification(payload.userId, notification);
+            }
+            notificationsSent = notifications.length;
+        }
     }
 
     await db
@@ -71,10 +86,11 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
         .set({
             lastPrice: price?.toString() ?? watch.lastPrice ?? null,
             lastStockStatus: stockStatus ?? watch.lastStockStatus ?? null,
-            lastCheckedAt: new Date(),
-            updatedAt: new Date(),
+            lastCheckedAt: now,
+            ...(notificationsSent > 0 && { lastNotifiedAt: now }),
+            updatedAt: now,
         })
         .where(eq(watches.id, watch.id));
 
-    return { success: true, notifications: notifications.length };
+    return { success: true, notifications: notificationsSent };
 }

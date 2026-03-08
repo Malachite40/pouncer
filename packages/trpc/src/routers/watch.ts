@@ -44,9 +44,16 @@ export const watchRouter = createTRPCRouter({
                         ].includes(v),
                     )
                     .default(900),
-                notifyPrice: z.boolean().default(true),
+                notifyPriceDrop: z.boolean().default(true),
+                notifyPriceIncrease: z.boolean().default(true),
                 notifyStock: z.boolean().default(true),
-                priceThreshold: z.number().positive().nullable().optional(),
+                priceDropThreshold: z.number().positive().nullable().optional(),
+                priceDropPercentThreshold: z.number().positive().max(100).nullable().optional(),
+                priceDropTargetPrice: z.number().positive().nullable().optional(),
+                priceIncreaseThreshold: z.number().positive().nullable().optional(),
+                priceIncreasePercentThreshold: z.number().positive().max(100).nullable().optional(),
+                priceIncreaseTargetPrice: z.number().positive().nullable().optional(),
+                notifyCooldownSeconds: z.number().int().positive().nullable().optional(),
                 skipMerge: z.boolean().default(false),
             }),
         )
@@ -75,10 +82,16 @@ export const watchRouter = createTRPCRouter({
                             cssSelector:
                                 input.cssSelector ?? existing.cssSelector,
                             checkIntervalSeconds: input.checkIntervalSeconds,
-                            notifyPrice: input.notifyPrice,
+                            notifyPriceDrop: input.notifyPriceDrop,
+                            notifyPriceIncrease: input.notifyPriceIncrease,
                             notifyStock: input.notifyStock,
-                            priceThreshold:
-                                input.priceThreshold?.toString() ?? null,
+                            priceDropThreshold: input.priceDropThreshold?.toString() ?? null,
+                            priceDropPercentThreshold: input.priceDropPercentThreshold?.toString() ?? null,
+                            priceDropTargetPrice: input.priceDropTargetPrice?.toString() ?? null,
+                            priceIncreaseThreshold: input.priceIncreaseThreshold?.toString() ?? null,
+                            priceIncreasePercentThreshold: input.priceIncreasePercentThreshold?.toString() ?? null,
+                            priceIncreaseTargetPrice: input.priceIncreaseTargetPrice?.toString() ?? null,
+                            notifyCooldownSeconds: input.notifyCooldownSeconds ?? null,
                             isActive: true,
                             updatedAt: new Date(),
                         })
@@ -107,10 +120,16 @@ export const watchRouter = createTRPCRouter({
                     checkType: input.checkType,
                     cssSelector: input.cssSelector ?? null,
                     checkIntervalSeconds: input.checkIntervalSeconds,
-                    notifyPrice: input.notifyPrice,
+                    notifyPriceDrop: input.notifyPriceDrop,
+                    notifyPriceIncrease: input.notifyPriceIncrease,
                     notifyStock: input.notifyStock,
-                    priceThreshold:
-                        input.priceThreshold?.toString() ?? null,
+                    priceDropThreshold: input.priceDropThreshold?.toString() ?? null,
+                    priceDropPercentThreshold: input.priceDropPercentThreshold?.toString() ?? null,
+                    priceDropTargetPrice: input.priceDropTargetPrice?.toString() ?? null,
+                    priceIncreaseThreshold: input.priceIncreaseThreshold?.toString() ?? null,
+                    priceIncreasePercentThreshold: input.priceIncreasePercentThreshold?.toString() ?? null,
+                    priceIncreaseTargetPrice: input.priceIncreaseTargetPrice?.toString() ?? null,
+                    notifyCooldownSeconds: input.notifyCooldownSeconds ?? null,
                     userId: ctx.userId,
                 })
                 .returning();
@@ -244,20 +263,58 @@ export const watchRouter = createTRPCRouter({
                         ].includes(v),
                     )
                     .optional(),
-                notifyPrice: z.boolean().optional(),
+                notifyPriceDrop: z.boolean().optional(),
+                notifyPriceIncrease: z.boolean().optional(),
                 notifyStock: z.boolean().optional(),
-                priceThreshold: z.number().positive().nullable().optional(),
+                priceDropThreshold: z.number().positive().nullable().optional(),
+                priceDropPercentThreshold: z.number().positive().max(100).nullable().optional(),
+                priceDropTargetPrice: z.number().positive().nullable().optional(),
+                priceIncreaseThreshold: z.number().positive().nullable().optional(),
+                priceIncreasePercentThreshold: z.number().positive().max(100).nullable().optional(),
+                priceIncreaseTargetPrice: z.number().positive().nullable().optional(),
+                notifyCooldownSeconds: z.number().int().positive().nullable().optional(),
             }),
         )
         .mutation(async ({ ctx, input }) => {
-            const { id, priceThreshold, ...data } = input;
+            const {
+                id,
+                priceDropThreshold,
+                priceDropPercentThreshold,
+                priceDropTargetPrice,
+                priceIncreaseThreshold,
+                priceIncreasePercentThreshold,
+                priceIncreaseTargetPrice,
+                notifyCooldownSeconds,
+                ...data
+            } = input;
+            const numericFields = {
+                ...(priceDropThreshold !== undefined && {
+                    priceDropThreshold: priceDropThreshold?.toString() ?? null,
+                }),
+                ...(priceDropPercentThreshold !== undefined && {
+                    priceDropPercentThreshold: priceDropPercentThreshold?.toString() ?? null,
+                }),
+                ...(priceDropTargetPrice !== undefined && {
+                    priceDropTargetPrice: priceDropTargetPrice?.toString() ?? null,
+                }),
+                ...(priceIncreaseThreshold !== undefined && {
+                    priceIncreaseThreshold: priceIncreaseThreshold?.toString() ?? null,
+                }),
+                ...(priceIncreasePercentThreshold !== undefined && {
+                    priceIncreasePercentThreshold: priceIncreasePercentThreshold?.toString() ?? null,
+                }),
+                ...(priceIncreaseTargetPrice !== undefined && {
+                    priceIncreaseTargetPrice: priceIncreaseTargetPrice?.toString() ?? null,
+                }),
+                ...(notifyCooldownSeconds !== undefined && {
+                    notifyCooldownSeconds: notifyCooldownSeconds ?? null,
+                }),
+            };
             const [updated] = await ctx.db
                 .update(watches)
                 .set({
                     ...data,
-                    ...(priceThreshold !== undefined && {
-                        priceThreshold: priceThreshold?.toString() ?? null,
-                    }),
+                    ...numericFields,
                     updatedAt: new Date(),
                 })
                 .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)))
