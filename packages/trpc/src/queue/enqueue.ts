@@ -1,5 +1,5 @@
 import type { JobsOptions } from 'bullmq';
-import { queue } from './client';
+import { getQueue } from './client';
 import { TASK_NAMES, type TaskName, type TaskPayload } from './index';
 
 type EnqueueWatchCheckOptions = JobsOptions & {
@@ -15,7 +15,7 @@ export async function enqueueTask<T extends TaskName>(
     payload: TaskPayload<T>,
     options?: JobsOptions,
 ) {
-    return queue.add(taskName, payload, options);
+    return getQueue().add(taskName, payload, options);
 }
 
 export async function enqueueWatchCheck(
@@ -26,7 +26,7 @@ export async function enqueueWatchCheck(
     const jobId = getWatchCheckJobId(payload.watchId);
 
     if (replaceExisting) {
-        const existingJob = await queue.getJob(jobId);
+        const existingJob = await getQueue().getJob(jobId);
 
         if (existingJob) {
             const existingState = await existingJob.getState();
@@ -43,7 +43,7 @@ export async function enqueueWatchCheck(
         }
     }
 
-    return queue.add(TASK_NAMES.CHECK_WATCH, payload, {
+    return getQueue().add(TASK_NAMES.CHECK_WATCH, payload, {
         ...jobOptions,
         jobId,
     });
