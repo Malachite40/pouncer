@@ -253,6 +253,10 @@ export function WatchList() {
                 </div>
 
                 <div className="flex items-center justify-end gap-4">
+                  <span className="shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    {readCount}{" "}
+                    {watch.checkType === "stock" ? "checks" : "reads"}
+                  </span>
                   <PriceHistoryChart
                     data={historyData}
                     variant="minimal"
@@ -265,10 +269,6 @@ export function WatchList() {
                           : undefined
                     }
                   />
-                  <span className="shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                    {readCount}{" "}
-                    {watch.checkType === "stock" ? "checks" : "reads"}
-                  </span>
                 </div>
               </div>
 

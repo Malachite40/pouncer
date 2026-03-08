@@ -76,7 +76,7 @@ export function UserButton() {
                         signOut({
                             fetchOptions: {
                                 onSuccess: () =>
-                                    window.location.assign('/login'),
+                                    window.location.assign('/'),
                             },
                         })
                     }
