@@ -4,7 +4,51 @@ import Link from 'next/link';
 
 export function Hero() {
     return (
-        <section className="flex flex-col items-center py-16 text-center sm:py-24">
+        <section className="relative flex flex-col items-center py-16 text-center sm:py-24">
+            {/* Radar ping effect */}
+            <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+                {/* Warm radial wash */}
+                <div
+                    className="absolute top-1/2 left-1/2 h-[800px] w-[800px] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-30"
+                    style={{
+                        background:
+                            'radial-gradient(circle, oklch(0.68 0.19 43 / 0.4) 0%, oklch(0.68 0.19 43 / 0.08) 40%, transparent 70%)',
+                    }}
+                />
+                {/* Pulsing rings */}
+                {[0, 1, 2, 3].map((i) => (
+                    <div
+                        key={i}
+                        className="absolute top-1/2 left-1/2 h-[300px] w-[300px] rounded-full"
+                        style={{
+                            border: '1px solid oklch(0.68 0.19 43 / 0.2)',
+                            boxShadow:
+                                '0 0 15px 2px oklch(0.68 0.19 43 / 0.12), inset 0 0 15px 2px oklch(0.68 0.19 43 / 0.06)',
+                            animation: 'var(--animate-hero-ping)',
+                            animationDelay: `${i * 1.5}s`,
+                        }}
+                    />
+                ))}
+                {/* Rotating sweep beam */}
+                <div
+                    className="absolute top-1/2 left-1/2 h-[600px] w-[600px] rounded-full"
+                    style={{
+                        background:
+                            'conic-gradient(from 0deg, transparent 0deg, transparent 300deg, oklch(0.68 0.19 43 / 0.12) 345deg, oklch(0.68 0.19 43 / 0.2) 360deg)',
+                        animation: 'var(--animate-hero-sweep)',
+                        maskImage: 'radial-gradient(circle, transparent 5%, black 15%, black 60%, transparent 70%)',
+                        WebkitMaskImage: 'radial-gradient(circle, transparent 5%, black 15%, black 60%, transparent 70%)',
+                    }}
+                />
+                {/* Center pulse dot */}
+                <div
+                    className="absolute top-1/2 left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary"
+                    style={{
+                        boxShadow: '0 0 20px 6px oklch(0.68 0.19 43 / 0.5)',
+                        animation: 'var(--animate-hero-pulse)',
+                    }}
+                />
+            </div>
             <Badge variant="outline" className="text-[11px] uppercase tracking-[0.18em]">
                 Price Drops + Restocks
             </Badge>
