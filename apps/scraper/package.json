@@ -1,0 +1,8 @@
+{
+    "name": "@pounce/scraper",
+    "private": true,
+    "version": "0.0.0",
+    "scripts": {
+        "dev": "uv run uvicorn app.main:app --reload --port 8001"
+    }
+}

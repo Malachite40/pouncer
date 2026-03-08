@@ -1,0 +1,22 @@
+{
+    "name": "pounce",
+    "private": true,
+    "workspaces": ["apps/*", "packages/*"],
+    "scripts": {
+        "build": "turbo run build",
+        "dev": "turbo run dev",
+        "lint": "turbo run lint",
+        "check": "biome check .",
+        "check:fix": "biome check --write .",
+        "format": "biome format --write .",
+        "db:generate": "turbo run db:generate",
+        "db:migrate": "turbo run db:migrate",
+        "db:push": "turbo run db:push"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^1.9.4",
+        "turbo": "^2.3.3",
+        "typescript": "^5.7.3"
+    },
+    "packageManager": "npm@10.9.2"
+}

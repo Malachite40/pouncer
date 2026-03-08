@@ -1,0 +1,39 @@
+{
+    "name": "@pounce/extension",
+    "displayName": "Pounce",
+    "version": "0.1.0",
+    "description": "Track prices and stock with one click",
+    "scripts": {
+        "dev": "plasmo dev",
+        "build": "plasmo build",
+        "package": "plasmo package"
+    },
+    "dependencies": {
+        "plasmo": "0.90.5",
+        "react": "18.2.0",
+        "react-dom": "18.2.0"
+    },
+    "devDependencies": {
+        "@types/chrome": "^0.0.287",
+        "typescript": "^5.7.3"
+    },
+    "manifest": {
+        "permissions": [
+            "activeTab",
+            "storage",
+            "cookies"
+        ],
+        "host_permissions": [
+            "<all_urls>"
+        ],
+        "commands": {
+            "toggle-selection": {
+                "suggested_key": {
+                    "default": "Ctrl+Shift+P",
+                    "mac": "Command+Shift+P"
+                },
+                "description": "Activate element selection mode"
+            }
+        }
+    }
+}

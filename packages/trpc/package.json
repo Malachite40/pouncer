@@ -1,0 +1,26 @@
+{
+    "name": "@pounce/trpc",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "exports": {
+        "./server": "./src/server.ts",
+        "./client": "./src/client.ts",
+        "./queue": "./src/queue-exports.ts"
+    },
+    "dependencies": {
+        "@pounce/db": "*",
+        "@trpc/server": "^11.0.0-rc.682",
+        "@trpc/client": "^11.0.0-rc.682",
+        "@trpc/react-query": "^11.0.0-rc.682",
+        "@tanstack/react-query": "^5.62.16",
+        "bullmq": "^5.34.8",
+        "superjson": "^2.2.2",
+        "zod": "^3.24.1"
+    },
+    "devDependencies": {
+        "@pounce/typescript-config": "*",
+        "@types/node": "^22.10.5",
+        "typescript": "^5.7.3"
+    }
+}

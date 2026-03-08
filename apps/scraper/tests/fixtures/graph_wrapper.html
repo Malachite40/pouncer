@@ -1,0 +1,33 @@
+<html>
+<head>
+    <title>Widget Pro - Gadgets R Us</title>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "WebPage",
+                "name": "Widget Pro",
+                "url": "https://example.com/widget-pro"
+            },
+            {
+                "@type": ["Product", "IndividualProduct"],
+                "name": "Widget Pro",
+                "offers": {
+                    "@type": "Offer",
+                    "price": "199.99",
+                    "priceCurrency": "USD",
+                    "availability": "https://schema.org/InStock"
+                }
+            }
+        ]
+    }
+    </script>
+</head>
+<body>
+    <h1>Widget Pro</h1>
+    <p>The best widget money can buy.</p>
+    <span itemprop="price" content="199.99">$199.99</span>
+    <link itemprop="availability" href="https://schema.org/InStock">
+</body>
+</html>

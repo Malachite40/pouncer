@@ -1,0 +1,15 @@
+{
+    "extends": "@pounce/typescript-config/library.json",
+    "compilerOptions": {
+        "baseUrl": ".",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "declaration": false,
+        "declarationMap": false,
+        "paths": {
+            "@pounce/trpc/*": ["./src/*"]
+        }
+    },
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules"]
+}

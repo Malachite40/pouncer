@@ -1,0 +1,27 @@
+{
+    "name": "@pounce/db",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "exports": {
+        ".": "./src/index.ts",
+        "./schema": "./src/schema.ts",
+        "./client": "./src/client.ts"
+    },
+    "scripts": {
+        "db:generate": "drizzle-kit generate",
+        "db:migrate": "drizzle-kit migrate",
+        "db:push": "drizzle-kit push",
+        "db:studio": "drizzle-kit studio"
+    },
+    "dependencies": {
+        "dotenv": "^16.6.1",
+        "drizzle-orm": "^0.38.3",
+        "postgres": "^3.4.5"
+    },
+    "devDependencies": {
+        "@pounce/typescript-config": "*",
+        "drizzle-kit": "^0.30.4",
+        "typescript": "^5.7.3"
+    }
+}

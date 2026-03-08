@@ -1,0 +1,27 @@
+{
+    "$schema": "https://turbo.build/schema.json",
+    "globalDependencies": [".env"],
+    "globalEnv": ["DATABASE_URL", "REDIS_URL", "SCRAPER_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SKIP_ENV_VALIDATION", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "NEXT_PUBLIC_BETTER_AUTH_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+    "tasks": {
+        "build": {
+            "dependsOn": ["^build"],
+            "outputs": [".next/**", "!.next/cache/**"]
+        },
+        "dev": {
+            "persistent": true,
+            "cache": false
+        },
+        "lint": {
+            "cache": false
+        },
+        "db:generate": {
+            "cache": false
+        },
+        "db:migrate": {
+            "cache": false
+        },
+        "db:push": {
+            "cache": false
+        }
+    }
+}

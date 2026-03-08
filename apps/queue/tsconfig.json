@@ -1,0 +1,17 @@
+{
+    "extends": "@pounce/typescript-config/library.json",
+    "compilerOptions": {
+        "baseUrl": ".",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "declaration": false,
+        "declarationMap": false,
+        "paths": {
+            "@pounce/queue/*": ["./src/*"],
+            "@pounce/trpc/server": ["../../packages/trpc/src/server.ts"],
+            "@pounce/trpc/queue": ["../../packages/trpc/src/queue-exports.ts"]
+        }
+    },
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules"]
+}

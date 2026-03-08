@@ -1,0 +1,1 @@
+ALTER TABLE "watches" RENAME COLUMN "check_interval_minutes" TO "check_interval_seconds";

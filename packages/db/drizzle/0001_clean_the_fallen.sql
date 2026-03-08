@@ -1,0 +1,1 @@
+ALTER TABLE "watches" ADD COLUMN "check_interval_minutes" integer DEFAULT 15 NOT NULL;

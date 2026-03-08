@@ -1,0 +1,21 @@
+{
+    "extends": "@pounce/typescript-config/nextjs.json",
+    "compilerOptions": {
+        "baseUrl": ".",
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "declaration": false,
+        "declarationMap": false,
+        "paths": {
+            "@/*": ["./*"],
+            "@pounce/ui/*": ["../../packages/ui/src/*"],
+            "@pounce/db/*": ["../../packages/db/src/*"],
+            "@pounce/db": ["../../packages/db/src/index.ts"],
+            "@pounce/trpc/*": ["../../packages/trpc/src/*"],
+            "@pounce/trpc/server": ["../../packages/trpc/src/server.ts"],
+            "@pounce/trpc/client": ["../../packages/trpc/src/client.ts"]
+        },
+        "incremental": true
+    },
+    "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+    "exclude": ["node_modules"]
+}
