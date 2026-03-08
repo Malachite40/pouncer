@@ -1,15 +1,8 @@
 import { Queue } from 'bullmq';
+import { getRedisConnection } from './redis';
 
 export const QUEUE_NAME = 'default';
 
-const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
-const parsed = new URL(redisUrl);
-
 export const queue = new Queue(QUEUE_NAME, {
-    connection: {
-        host: parsed.hostname,
-        port: Number(parsed.port) || 6379,
-        ...(parsed.password && { password: decodeURIComponent(parsed.password) }),
-        ...(parsed.username && { username: decodeURIComponent(parsed.username) }),
-    },
+    connection: getRedisConnection(),
 });

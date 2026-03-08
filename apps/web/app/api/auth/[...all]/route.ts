@@ -1,10 +1,9 @@
-import { auth } from '@/auth';
+import { getAuth } from '@/auth';
 import { toNextJsHandler } from 'better-auth/next-js';
 import { type NextRequest, NextResponse } from 'next/server';
 
-const { GET: authGet, POST: authPost } = toNextJsHandler(auth);
-
 export async function GET(req: NextRequest) {
+    const { GET: authGet } = toNextJsHandler(getAuth());
     const response = await authGet(req);
     const origin = req.headers.get('origin') ?? '';
     if (origin.startsWith('chrome-extension://')) {
@@ -21,6 +20,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+    const { POST: authPost } = toNextJsHandler(getAuth());
     const response = await authPost(req);
     const origin = req.headers.get('origin') ?? '';
     if (origin.startsWith('chrome-extension://')) {
