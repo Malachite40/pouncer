@@ -10,15 +10,16 @@ import {
 
 export async function extractSessionToken(): Promise<string | null> {
     const apiUrl = await getApiUrl();
-    try {
-        const cookie = await chrome.cookies.get({
-            url: apiUrl,
-            name: SESSION_COOKIE_NAME,
-        });
-        return cookie?.value ?? null;
-    } catch {
-        return null;
+    const cookieNames = [`__Secure-${SESSION_COOKIE_NAME}`, SESSION_COOKIE_NAME];
+    for (const name of cookieNames) {
+        try {
+            const cookie = await chrome.cookies.get({ url: apiUrl, name });
+            if (cookie?.value) return cookie.value;
+        } catch {
+            // continue
+        }
     }
+    return null;
 }
 
 export async function checkAndRefreshAuth(): Promise<
@@ -57,8 +58,11 @@ async function validateSession(
     token: string,
 ): Promise<{ id: string; name: string; email: string; image: string | null } | null> {
     try {
+        const cookieName = apiUrl.startsWith('https')
+            ? `__Secure-${SESSION_COOKIE_NAME}`
+            : SESSION_COOKIE_NAME;
         const res = await fetch(`${apiUrl}/api/auth/get-session`, {
-            headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
+            headers: { Cookie: `${cookieName}=${token}` },
         });
         if (!res.ok) return null;
         const data = await res.json();

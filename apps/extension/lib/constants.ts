@@ -1,4 +1,4 @@
-export const API_BASE_URL = 'http://localhost:3020';
+export const API_BASE_URL = process.env.PLASMO_PUBLIC_API_BASE_URL || 'http://localhost:3020';
 
 export const STORAGE_KEYS = {
     AUTH_TOKEN: 'pounce_auth_token',
