@@ -22,6 +22,7 @@ COPY apps/scraper/app/ app/
 RUN uv sync --no-dev
 
 # Fix ownership
+RUN mkdir -p /home/appuser/.cache/uv && chown -R appuser:appgroup /home/appuser
 RUN chown -R appuser:appgroup /app
 
 USER appuser

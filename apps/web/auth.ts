@@ -24,7 +24,7 @@ function getAuth() {
             },
             trustedOrigins: ['chrome-extension://*'],
             plugins: [nextCookies()],
-        });
+        }) as unknown as ReturnType<typeof betterAuth>;
     }
     return _auth;
 }
