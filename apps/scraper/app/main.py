@@ -1,13 +1,24 @@
 import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pythonjsonlogger.json import JsonFormatter
 
 from .config import settings
 from .models import CheckRequest, CheckResponse
 from .scraper import scrape_product
 
-logging.basicConfig(level=logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(
+    JsonFormatter(
+        fmt="%(levelname)s %(name)s %(message)s",
+        rename_fields={"levelname": "level", "asctime": "timestamp"},
+        timestamp=True,
+    )
+)
+logging.root.addHandler(handler)
+logging.root.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Pounce Scraper")
