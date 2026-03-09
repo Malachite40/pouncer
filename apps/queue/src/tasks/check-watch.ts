@@ -1,4 +1,4 @@
-import { checkResults, watches } from '@pounce/db/schema';
+import { checkResults, sentNotifications, watches } from '@pounce/db/schema';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 
 import { db } from '../db';
@@ -81,7 +81,13 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
 
         if (cooldownElapsed || payload.manual) {
             for (const notification of notifications) {
-                await sendTelegramNotification(payload.userId, notification);
+                await sendTelegramNotification(payload.userId, notification.message);
+                await db.insert(sentNotifications).values({
+                    userId: payload.userId,
+                    watchId: watch.id,
+                    message: notification.message,
+                    type: notification.type,
+                });
             }
             notificationsSent = notifications.length;
         }

@@ -1,9 +1,49 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc, count } from 'drizzle-orm';
 import { z } from 'zod';
-import { notificationSettings } from '@pounce/db/schema';
+import { notificationSettings, sentNotifications, watches } from '@pounce/db/schema';
 import { createTRPCRouter, authenticatedProcedure } from '../trpc';
 
 export const notificationRouter = createTRPCRouter({
+    history: authenticatedProcedure
+        .input(
+            z.object({
+                page: z.number().int().positive().default(1),
+                pageSize: z.number().int().positive().max(100).default(50),
+            }).default({}),
+        )
+        .query(async ({ ctx, input }) => {
+            const { page, pageSize } = input;
+            const offset = (page - 1) * pageSize;
+
+            const [items, [countResult]] = await Promise.all([
+                ctx.db
+                    .select({
+                        id: sentNotifications.id,
+                        message: sentNotifications.message,
+                        type: sentNotifications.type,
+                        sentAt: sentNotifications.sentAt,
+                        watchId: sentNotifications.watchId,
+                        watchName: watches.name,
+                        watchUrl: watches.url,
+                    })
+                    .from(sentNotifications)
+                    .leftJoin(watches, eq(sentNotifications.watchId, watches.id))
+                    .where(eq(sentNotifications.userId, ctx.userId))
+                    .orderBy(desc(sentNotifications.sentAt))
+                    .limit(pageSize)
+                    .offset(offset),
+                ctx.db
+                    .select({ total: count() })
+                    .from(sentNotifications)
+                    .where(eq(sentNotifications.userId, ctx.userId)),
+            ]);
+
+            const totalItems = countResult?.total ?? 0;
+            const totalPages = Math.ceil(totalItems / pageSize);
+
+            return { items, page, totalItems, totalPages };
+        }),
+
     getSettings: authenticatedProcedure.query(async ({ ctx }) => {
         const [settings] = await ctx.db
             .select()

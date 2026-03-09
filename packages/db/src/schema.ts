@@ -118,6 +118,17 @@ export const checkResults = pgTable('check_results', {
     index('check_results_watch_id_checked_at_idx').on(table.watchId, table.checkedAt),
 ]);
 
+export const sentNotifications = pgTable('sent_notifications', {
+    id: serial('id').primaryKey(),
+    userId: text('user_id').references(() => user.id, { onDelete: 'cascade' }),
+    watchId: uuid('watch_id').references(() => watches.id, { onDelete: 'cascade' }),
+    message: text('message').notNull(),
+    type: text('type').notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+    index('sent_notifications_user_id_sent_at_idx').on(table.userId, table.sentAt),
+]);
+
 export const notificationSettings = pgTable('notification_settings', {
     id: serial('id').primaryKey(),
     userId: text('user_id').references(() => user.id, { onDelete: 'cascade' }),

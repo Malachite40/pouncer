@@ -79,7 +79,7 @@ export function buildWatchNotifications({
     price,
     stockStatus,
 }: BuildNotificationsInput) {
-    const notifications: string[] = [];
+    const notifications: { message: string; type: string }[] = [];
 
     if (price !== null && watch.lastPrice !== null) {
         const previousPrice = Number.parseFloat(watch.lastPrice);
@@ -101,7 +101,7 @@ export function buildWatchNotifications({
                     if (targetPrice !== null && price <= targetPrice) {
                         message += `\n✅ Below target price $${targetPrice.toFixed(2)}`;
                     }
-                    notifications.push(message);
+                    notifications.push({ message, type: 'price_drop' });
                 }
             } else if (watch.notifyPriceIncrease) {
                 if (shouldNotifyForIncrease(watch, previousPrice, price)) {
@@ -119,7 +119,7 @@ export function buildWatchNotifications({
                     if (targetPrice !== null && price >= targetPrice) {
                         message += `\n⚠️ Above target price $${targetPrice.toFixed(2)}`;
                     }
-                    notifications.push(message);
+                    notifications.push({ message, type: 'price_increase' });
                 }
             }
         }
@@ -133,8 +133,8 @@ export function buildWatchNotifications({
     ) {
         notifications.push(
             stockStatus === 'in_stock'
-                ? `🟢 <b>Back in Stock!</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`
-                : `⚪ <b>Out of Stock</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`,
+                ? { message: `🟢 <b>Back in Stock!</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`, type: 'back_in_stock' }
+                : { message: `⚪ <b>Out of Stock</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`, type: 'out_of_stock' },
         );
     }
 

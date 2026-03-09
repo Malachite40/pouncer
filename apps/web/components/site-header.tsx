@@ -7,7 +7,8 @@ import Link from 'next/link';
 const navItems = [
     { href: '/', label: 'Board' },
     { href: '/watches/new', label: 'New Watch' },
-    { href: '/settings', label: 'Alerts' },
+    { href: '/alerts', label: 'Alerts' },
+    { href: '/settings', label: 'Settings' },
 ];
 
 export async function SiteHeader() {
