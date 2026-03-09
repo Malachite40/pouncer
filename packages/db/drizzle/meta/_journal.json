@@ -50,6 +50,13 @@
       "when": 1772950976063,
       "tag": "0006_special_wallop",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1773013978144,
+      "tag": "0007_brief_unicorn",
+      "breakpoints": true
     }
   ]
 }

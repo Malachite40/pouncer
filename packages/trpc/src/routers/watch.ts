@@ -1,5 +1,5 @@
 import { checkResults, watches } from '@pounce/db/schema';
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { enqueueWatchCheck } from '../queue/enqueue';
 import { authenticatedProcedure, createTRPCRouter } from '../trpc';
@@ -237,13 +237,61 @@ export const watchRouter = createTRPCRouter({
             if (!watch) return null;
 
             const history = await ctx.db
-                .select()
+                .select({
+                    price: checkResults.price,
+                    stockStatus: checkResults.stockStatus,
+                    checkedAt: checkResults.checkedAt,
+                })
                 .from(checkResults)
                 .where(eq(checkResults.watchId, input.id))
                 .orderBy(desc(checkResults.checkedAt))
-                .limit(100);
+                .limit(24);
 
             return { ...watch, history };
+        }),
+
+    history: authenticatedProcedure
+        .input(
+            z.object({
+                watchId: z.string().uuid(),
+                page: z.number().int().positive().default(1),
+                pageSize: z.number().int().positive().max(100).default(25),
+            }),
+        )
+        .query(async ({ ctx, input }) => {
+            const { watchId, page, pageSize } = input;
+
+            const [watch] = await ctx.db
+                .select({ id: watches.id })
+                .from(watches)
+                .where(
+                    and(
+                        eq(watches.id, watchId),
+                        eq(watches.userId, ctx.userId),
+                    ),
+                );
+            if (!watch) return { items: [], page, totalItems: 0, totalPages: 0 };
+
+            const offset = (page - 1) * pageSize;
+
+            const [items, [countResult]] = await Promise.all([
+                ctx.db
+                    .select()
+                    .from(checkResults)
+                    .where(eq(checkResults.watchId, watchId))
+                    .orderBy(desc(checkResults.checkedAt))
+                    .limit(pageSize)
+                    .offset(offset),
+                ctx.db
+                    .select({ total: count() })
+                    .from(checkResults)
+                    .where(eq(checkResults.watchId, watchId)),
+            ]);
+
+            const totalItems = countResult?.total ?? 0;
+            const totalPages = Math.ceil(totalItems / pageSize);
+
+            return { items, page, totalItems, totalPages };
         }),
 
     update: authenticatedProcedure

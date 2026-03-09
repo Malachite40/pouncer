@@ -1,0 +1,1 @@
+CREATE INDEX "check_results_watch_id_checked_at_idx" ON "check_results" USING btree ("watch_id","checked_at");

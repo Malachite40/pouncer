@@ -44,16 +44,10 @@ import {
 import { PriceHistoryChart } from '@pounce/ui/components/price-history-chart';
 import { Switch } from '@pounce/ui/components/switch';
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@pounce/ui/components/table';
-import {
     BellIcon,
     CheckIcon,
+    ChevronLeftIcon,
+    ChevronRightIcon,
     CrosshairIcon,
     EllipsisVerticalIcon,
     ExternalLinkIcon,
@@ -63,9 +57,10 @@ import {
     TimerIcon,
     Trash2Icon,
 } from 'lucide-react';
+import { keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 
 const INTERVAL_OPTIONS = [
     { value: '5', label: 'Every 5s', short: '5s' },
@@ -103,6 +98,8 @@ export function WatchDetailPage() {
         number | null
     >(null);
     const [notifDialogOpen, setNotifDialogOpen] = useState(false);
+    const [historyPage, setHistoryPage] = useState(1);
+    const [expandedErrorId, setExpandedErrorId] = useState<number | null>(null);
 
     const { data: watch } = api.watch.get.useQuery(
         { id: id ?? '' },
@@ -124,11 +121,33 @@ export function WatchDetailPage() {
             refetchIntervalInBackground: true,
         },
     );
+    const {
+        data: historyData,
+        isPlaceholderData: isHistoryPlaceholder,
+    } = api.watch.history.useQuery(
+        { watchId: id ?? '', page: historyPage, pageSize: 50 },
+        {
+            enabled: isValidWatchId,
+            placeholderData: keepPreviousData,
+            refetchInterval: historyPage === 1 ? () => {
+                if (pendingManualCheckAt !== null) return 1000;
+                if (!watch?.isActive) return false;
+                return (watch?.checkIntervalSeconds ?? 900) * 1000;
+            } : false,
+        },
+    );
+
+    const totalPages = historyData?.totalPages ?? 1;
+    const canGoNext = historyPage < totalPages && !isHistoryPlaceholder;
+    const canGoPrev = historyPage > 1;
+
     const checkNow = api.watch.checkNow.useMutation({
         onSuccess: () => {
             setManualCheckError(null);
             setManualCheckComplete(false);
+            setHistoryPage(1);
             void utils.watch.get.invalidate({ id: id ?? '' });
+            void utils.watch.history.invalidate();
         },
         onError: (error) => {
             setManualCheckError(error.message);
@@ -458,129 +477,127 @@ export function WatchDetailPage() {
                     </p>
                 ) : null}
 
-                {watch.history?.length ? (
-                    <div className="mt-6">
-                        {/* Mobile history cards */}
-                        <div className="space-y-px md:hidden">
-                            {watch.history.map((check) => (
-                                <div
-                                    key={check.id}
-                                    className="border-t border-border/45 px-4 py-3"
-                                >
-                                    <div className="flex flex-wrap items-start justify-between gap-3">
-                                        <div className="space-y-0.5">
-                                            <div className="text-sm font-medium text-foreground/94">
-                                                {formatDatePart(
-                                                    check.checkedAt,
-                                                )}
-                                            </div>
-                                            <div className="text-[10px] leading-none text-foreground/58 tabular-nums">
-                                                {formatTimePart(
-                                                    check.checkedAt,
-                                                )}
+                {historyData && historyData.items.length > 0 ? (
+                    <div className="mt-4">
+                        {/* Mobile history list */}
+                        <div className="md:hidden">
+                            {historyData.items.map((check) => {
+                                const hasError = !!check.error;
+                                const isExpanded = expandedErrorId === check.id;
+                                return (
+                                    <Fragment key={check.id}>
+                                        <div
+                                            className={`flex items-center justify-between border-t border-border/30 px-4 py-1.5${hasError ? ' cursor-pointer active:bg-muted/30' : ''}`}
+                                            onClick={hasError ? () => setExpandedErrorId(isExpanded ? null : check.id) : undefined}
+                                        >
+                                            <span className="text-[11px] tabular-nums text-foreground/58">
+                                                {formatCompact(check.checkedAt)}
+                                            </span>
+                                            <div className="flex items-center gap-3">
+                                                {hasError && <span className="inline-block size-1.5 rounded-full bg-destructive" />}
+                                                <StockDot status={normalizeStatus(check.stockStatus)} />
+                                                <span className="min-w-[4.5rem] text-right text-sm tabular-nums text-foreground">
+                                                    {formatPrice(check.price)}
+                                                </span>
                                             </div>
                                         </div>
-                                        <StatusBadge
-                                            status={normalizeStatus(
-                                                check.stockStatus,
-                                            )}
-                                        />
-                                    </div>
-                                    <div className="mt-2 space-y-2">
-                                        <span className="font-[family:var(--font-display)] text-xl leading-none tracking-[-0.04em] text-foreground">
-                                            {formatPrice(check.price)}
-                                        </span>
-                                        {check.error && (
-                                            <ErrorState error={check.error} />
+                                        {isExpanded && (
+                                            <div className="border-t border-border/10 px-4 py-2 text-xs leading-5 text-destructive/90">
+                                                {check.error}
+                                            </div>
                                         )}
-                                    </div>
-                                    {check.rawContent && (
-                                        <div className="mt-2">
-                                            <EvidenceCell
-                                                value={check.rawContent}
-                                            />
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                                    </Fragment>
+                                );
+                            })}
                         </div>
 
                         {/* Desktop history table */}
                         <div className="hidden md:block">
-                            <Table className="min-w-[44rem]">
-                                <TableHeader>
-                                    <TableRow className="border-border/55 hover:bg-transparent">
-                                        <TableHead className="h-auto px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                            Checked
-                                        </TableHead>
-                                        <TableHead className="h-auto px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                            Price
-                                        </TableHead>
-                                        <TableHead className="h-auto px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                            Stock
-                                        </TableHead>
-                                        <TableHead className="h-auto px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                            Error
-                                        </TableHead>
-                                        <TableHead className="h-auto px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                            Evidence
-                                        </TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody className="[&_tr:last-child]:border-border/55">
-                                    {watch.history.map((check) => (
-                                        <TableRow
-                                            key={check.id}
-                                            className="border-border/45 align-top hover:bg-transparent"
-                                        >
-                                            <TableCell className="px-4 py-2.5 align-top">
-                                                <div className="space-y-1">
-                                                    <div className="text-sm font-medium text-foreground/94">
-                                                        {formatDatePart(
-                                                            check.checkedAt,
+                            <table className="w-full text-left">
+                                <thead>
+                                    <tr className="border-b border-border/40 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                                        <th className="px-4 py-1.5 font-semibold">When</th>
+                                        <th className="px-4 py-1.5 font-semibold">Price</th>
+                                        <th className="px-4 py-1.5 font-semibold">Stock</th>
+                                        <th className="px-4 py-1.5 font-semibold">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {historyData.items.map((check) => {
+                                        const hasError = !!check.error;
+                                        const isExpanded = expandedErrorId === check.id;
+                                        return (
+                                            <Fragment key={check.id}>
+                                                <tr
+                                                    className={`border-t border-border/20 text-sm${hasError ? ' cursor-pointer hover:bg-muted/30' : ''}`}
+                                                    onClick={hasError ? () => setExpandedErrorId(isExpanded ? null : check.id) : undefined}
+                                                >
+                                                    <td className="px-4 py-1 text-[11px] tabular-nums text-foreground/58">
+                                                        {formatCompact(check.checkedAt)}
+                                                    </td>
+                                                    <td className="px-4 py-1 tabular-nums text-foreground">
+                                                        {formatPrice(check.price)}
+                                                    </td>
+                                                    <td className="px-4 py-1">
+                                                        <StockDot status={normalizeStatus(check.stockStatus)} />
+                                                    </td>
+                                                    <td className="px-4 py-1">
+                                                        {hasError ? (
+                                                            <span className="text-[10px] uppercase tracking-[0.12em] text-destructive/80">err</span>
+                                                        ) : (
+                                                            <span className="text-[10px] uppercase tracking-[0.12em] text-emerald-400/60">ok</span>
                                                         )}
-                                                    </div>
-                                                    <div className="text-[10px] leading-none text-foreground/58 tabular-nums">
-                                                        {formatTimePart(
-                                                            check.checkedAt,
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="px-4 py-2.5 align-top">
-                                                <span className="font-[family:var(--font-display)] text-xl leading-none tracking-[-0.04em] text-foreground">
-                                                    {formatPrice(check.price)}
-                                                </span>
-                                            </TableCell>
-                                            <TableCell className="px-4 py-2.5 align-top">
-                                                <StatusBadge
-                                                    status={normalizeStatus(
-                                                        check.stockStatus,
-                                                    )}
-                                                />
-                                            </TableCell>
-                                            <TableCell className="px-4 py-2.5 align-top">
-                                                <ErrorState
-                                                    error={check.error}
-                                                />
-                                            </TableCell>
-                                            <TableCell className="px-4 py-2.5 align-top">
-                                                <EvidenceCell
-                                                    value={check.rawContent}
-                                                />
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                                    </td>
+                                                </tr>
+                                                {isExpanded && (
+                                                    <tr className="border-t border-border/10">
+                                                        <td colSpan={4} className="px-4 py-2 text-xs leading-5 text-destructive/90">
+                                                            {check.error}
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </Fragment>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
                         </div>
+
+                        {/* Pagination controls */}
+                        {totalPages > 1 && (
+                            <div className="flex items-center justify-between border-t border-border/30 px-4 py-2 sm:px-5">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-[11px] uppercase tracking-[0.12em]"
+                                    disabled={!canGoPrev}
+                                    onClick={() => setHistoryPage((p) => Math.max(p - 1, 1))}
+                                >
+                                    <ChevronLeftIcon className="size-3.5" />
+                                    Prev
+                                </Button>
+                                <span className={`text-[10px] tabular-nums tracking-[0.12em] ${isHistoryPlaceholder ? 'text-muted-foreground/40' : 'text-muted-foreground/70'}`}>
+                                    {historyPage} / {totalPages}
+                                </span>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-[11px] uppercase tracking-[0.12em]"
+                                    disabled={!canGoNext}
+                                    onClick={() => setHistoryPage((p) => Math.min(p + 1, totalPages))}
+                                >
+                                    Next
+                                    <ChevronRightIcon className="size-3.5" />
+                                </Button>
+                            </div>
+                        )}
                     </div>
-                ) : (
+                ) : historyData ? (
                     <p className="mt-6 text-sm leading-6 text-muted-foreground">
                         No checks yet. Run a manual check to capture the first
                         signal.
                     </p>
-                )}
+                ) : null}
 
                 <Dialog
                     open={notifDialogOpen}
@@ -737,49 +754,34 @@ function StatusBadge({
     );
 }
 
-function ErrorState({ error }: { error: string | null }) {
-    if (!error) {
+function StockDot({ status }: { status: 'in_stock' | 'out_of_stock' | null }) {
+    if (status === 'in_stock') {
         return (
-            <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/6 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-                Clear
+            <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-emerald-400">
+                <span className="inline-block size-1.5 rounded-full bg-emerald-400" />
+                in
             </span>
         );
     }
-
-    return (
-        <div className="max-w-xs rounded-sm border border-destructive/30 bg-destructive/8 px-2 py-1.5 text-sm leading-5 text-red-100/92">
-            {error}
-        </div>
-    );
+    if (status === 'out_of_stock') {
+        return (
+            <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-destructive/80">
+                <span className="inline-block size-1.5 rounded-full bg-destructive" />
+                out
+            </span>
+        );
+    }
+    return <span className="inline-block size-1.5 rounded-full bg-muted-foreground/30" title="Unknown" />;
 }
 
-function EvidenceCell({ value }: { value: string | null }) {
-    if (!value) {
-        return (
-            <span className="inline-flex items-center rounded-md border border-border/70 bg-muted/35 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                No Match Data
-            </span>
-        );
-    }
-
-    const preview =
-        value.length > 180 ? `${value.slice(0, 180).trimEnd()}...` : value;
-
-    return (
-        <details className="group max-w-md">
-            <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-[0.18em] text-primary marker:hidden transition-colors hover:text-primary/80">
-                View evidence
-            </summary>
-            <div className="mt-2 rounded-sm border border-border/60 bg-card/38 p-3 text-xs leading-5 whitespace-pre-wrap break-words text-muted-foreground">
-                {preview}
-                {value.length > 180 ? (
-                    <div className="mt-3 border-t border-border/50 pt-3 text-foreground/90">
-                        {value}
-                    </div>
-                ) : null}
-            </div>
-        </details>
-    );
+function formatCompact(value: Date | string) {
+    const d = new Date(value);
+    return d.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+    });
 }
 
 function formatPrice(value: string | null) {
@@ -788,34 +790,6 @@ function formatPrice(value: string | null) {
     }
 
     return `$${Number.parseFloat(value).toFixed(2)}`;
-}
-
-function formatDate(value: Date | string | null) {
-    if (!value) {
-        return 'Never';
-    }
-
-    return new Date(value).toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-    });
-}
-
-function formatDatePart(value: Date | string) {
-    return new Date(value).toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-    });
-}
-
-function formatTimePart(value: Date | string) {
-    return new Date(value).toLocaleString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-        second: '2-digit',
-    });
 }
 
 type ThresholdMode = 'abs' | 'pct' | 'target';

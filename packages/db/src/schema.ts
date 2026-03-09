@@ -1,5 +1,6 @@
 import {
     boolean,
+    index,
     integer,
     numeric,
     pgTable,
@@ -108,7 +109,9 @@ export const checkResults = pgTable('check_results', {
     checkedAt: timestamp('checked_at', { withTimezone: true })
         .notNull()
         .defaultNow(),
-});
+}, (table) => [
+    index('check_results_watch_id_checked_at_idx').on(table.watchId, table.checkedAt),
+]);
 
 export const notificationSettings = pgTable('notification_settings', {
     id: serial('id').primaryKey(),
