@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class CheckRequest(BaseModel):
     url: str
     css_selector: str | None = None
+    element_fingerprint: str | None = None
 
 
 class CheckResponse(BaseModel):

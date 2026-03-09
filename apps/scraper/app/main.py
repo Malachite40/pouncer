@@ -52,7 +52,7 @@ def health():
 
 @app.post("/check", response_model=CheckResponse)
 def check(request: CheckRequest):
-    logger.info("Check request: url=%r, css_selector=%r", request.url, request.css_selector)
-    result = scrape_product(request.url, request.css_selector)
+    logger.info("Check request: url=%r, css_selector=%r, has_fingerprint=%s", request.url, request.css_selector, request.element_fingerprint is not None)
+    result = scrape_product(request.url, request.css_selector, request.element_fingerprint)
     logger.info("Result: price=%s, stock=%s, error=%s", result["price"], result["stock_status"], result["error"])
     return CheckResponse(**result)

@@ -1,6 +1,6 @@
 import type { Message } from '~lib/messages';
 import { detectCheckType, detectImageUrl, detectName, detectPrice } from './detector';
-import { generateSelector } from './selector-generator';
+import { generateElementFingerprint, generateSelector } from './selector-generator';
 import { injectStyles, removeStyles, removeToast, showToast } from './styles';
 import {
     createBadge,
@@ -179,8 +179,10 @@ async function handleClick(e: Event): Promise<void> {
     if (!element) return;
     const rect = element.getBoundingClientRect();
 
-    // Generate selector and detect info
+    // Generate selector, fingerprint, and detect info
     const cssSelector = generateSelector(element);
+    const fingerprint = generateElementFingerprint(element);
+    const elementFingerprint = JSON.stringify(fingerprint);
     const name = detectName();
     const checkType = detectCheckType(element);
     const price = detectPrice(element);
@@ -233,6 +235,7 @@ async function handleClick(e: Event): Promise<void> {
             payload: {
                 url: window.location.href,
                 cssSelector,
+                elementFingerprint,
                 name: result.name,
                 checkType: result.checkType,
                 imageUrl,

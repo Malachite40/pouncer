@@ -6,6 +6,7 @@ interface CreateWatchInput {
     name: string;
     checkType: 'price' | 'stock' | 'both';
     cssSelector: string;
+    elementFingerprint: string | null;
     imageUrl: string | null;
     skipMerge: boolean;
 }
@@ -73,6 +74,7 @@ export async function createWatch(
                     name: input.name,
                     checkType: input.checkType,
                     cssSelector: input.cssSelector,
+                    elementFingerprint: input.elementFingerprint,
                     imageUrl: input.imageUrl,
                     skipMerge: input.skipMerge,
                 },

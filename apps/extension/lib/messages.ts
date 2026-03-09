@@ -6,6 +6,7 @@ export type Message =
           payload: {
               url: string;
               cssSelector: string;
+              elementFingerprint: string | null;
               name: string;
               checkType: 'price' | 'stock' | 'both';
               imageUrl: string | null;

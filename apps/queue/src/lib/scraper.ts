@@ -4,11 +4,13 @@ import type { ScraperCheckResult } from '../types';
 interface CheckWatchInput {
     url: string;
     cssSelector: string | null;
+    elementFingerprint: string | null;
 }
 
 export async function checkWatchWithScraper({
     url,
     cssSelector,
+    elementFingerprint,
 }: CheckWatchInput): Promise<ScraperCheckResult> {
     try {
         const response = await fetch(`${scraperUrl}/check`, {
@@ -17,6 +19,7 @@ export async function checkWatchWithScraper({
             body: JSON.stringify({
                 url,
                 css_selector: cssSelector,
+                element_fingerprint: elementFingerprint,
             }),
         });
 

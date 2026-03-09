@@ -18,6 +18,7 @@ from .parsing import ScrapeResult, _error_result, _validate_price
 from .strategies import (
     _extract_common_selectors,
     _extract_css_selector,
+    _extract_fingerprint,
     _extract_meta_price,
     _extract_title_window,
 )
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _STOCK_SOURCE_PRIORITIES = {
     "css_selector": 100,
+    "fingerprint": 95,
     "host": 90,
     "json-ld": 80,
     "selectors": 70,
@@ -35,10 +37,10 @@ _STOCK_SOURCE_PRIORITIES = {
 }
 
 
-def scrape_product(url: str, css_selector: str | None = None) -> ScrapeResult:
+def scrape_product(url: str, css_selector: str | None = None, element_fingerprint: str | None = None) -> ScrapeResult:
     """Scrape a product page for price and stock information."""
     try:
-        logger.info("--- Scraping %s (css_selector=%r) ---", url, css_selector)
+        logger.info("--- Scraping %s (css_selector=%r, has_fingerprint=%s) ---", url, css_selector, element_fingerprint is not None)
 
         static_result = _fetch_static_page(url)
         if static_result.get("error"):
@@ -52,6 +54,7 @@ def scrape_product(url: str, css_selector: str | None = None) -> ScrapeResult:
             html=html,
             url=url,
             css_selector=css_selector,
+            element_fingerprint=element_fingerprint,
             source_label="scrapling-static",
         )
         logger.info(
@@ -75,6 +78,7 @@ def scrape_product(url: str, css_selector: str | None = None) -> ScrapeResult:
                     html=dyn_html,
                     url=url,
                     css_selector=css_selector,
+                    element_fingerprint=element_fingerprint,
                     source_label="scrapling-dynamic",
                 )
                 logger.info(
@@ -195,6 +199,7 @@ def _extract_from_html(
     html: str,
     url: str,
     css_selector: str | None = None,
+    element_fingerprint: str | None = None,
     source_label: str | None = None,
 ) -> ScrapeResult:
     soup = BeautifulSoup(html, "lxml")
@@ -211,6 +216,8 @@ def _extract_from_html(
     strategies = []
     if css_selector:
         strategies.append(("css_selector", lambda: _extract_css_selector(soup, css_selector)))
+    if element_fingerprint:
+        strategies.append(("fingerprint", lambda: _extract_fingerprint(soup, element_fingerprint)))
     strategies.append((f"host:{hostname}", lambda: _extract_host_specific(url, soup)))
     strategies.append(("json-ld", lambda: _extract_json_ld(soup)))
     strategies.append(("title-window", lambda: _extract_title_window(soup)))

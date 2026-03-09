@@ -1,7 +1,8 @@
+import json
 import logging
 import re
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .parsing import (
     ExtractionResult,
@@ -270,6 +271,145 @@ def _extract_stock_from_buttons(soup: BeautifulSoup) -> tuple[str | None, str | 
         return "out_of_stock", f"button text: oos"
 
     return None, None
+
+
+# --- Element fingerprint extraction ---
+
+
+_STABLE_ATTRS = [
+    "data-testid", "data-test-id", "data-qa", "data-cy",
+    "data-product-id", "data-price", "data-sku",
+    "itemprop", "role", "type", "name", "aria-label",
+]
+
+_PRICE_PATTERN = re.compile(r"[\$\€\£¥₹]\s*\d|^\d[\d,]*\.\d{2}$")
+
+
+def _normalize_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _text_overlaps(stored: str, candidate: str) -> bool:
+    """Check if texts overlap meaningfully. For price elements, match on price pattern presence."""
+    s = _normalize_ws(stored)
+    c = _normalize_ws(candidate)
+    if not s or not c:
+        return False
+    # If stored text looks like a price, just check that candidate also has a price-like pattern
+    if _PRICE_PATTERN.search(s):
+        return _PRICE_PATTERN.search(c) is not None
+    # Otherwise use substring containment
+    return s in c or c in s
+
+
+def _ancestor_tags_score(stored: list[str], candidate_el: Tag) -> int:
+    """Score how well the candidate's ancestor chain matches the stored one."""
+    ancestors: list[str] = []
+    parent = candidate_el.parent
+    while parent and parent.name not in ("[document]", "html") and len(ancestors) < 10:
+        ancestors.insert(0, parent.name)
+        parent = parent.parent
+    # Count matching positions from the end (closest ancestors matter most)
+    score = 0
+    for s, c in zip(reversed(stored), reversed(ancestors)):
+        if s == c:
+            score += 1
+        else:
+            break
+    return score
+
+
+def _result_from_element(el: Tag) -> ExtractionResult | None:
+    text = el.get_text(strip=True)
+    if not text:
+        return None
+    price = _extract_price_from_text(text)
+    stock_status = _extract_stock_from_text(text)
+    if price is None and stock_status is None:
+        return None
+    return ExtractionResult(price=price, stock_status=stock_status, raw=text)
+
+
+def _extract_fingerprint(soup: BeautifulSoup, fingerprint_json: str) -> ExtractionResult | None:
+    """Extract price/stock using an element fingerprint as fallback."""
+    try:
+        fp = json.loads(fingerprint_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    tag_name = fp.get("tagName", "").lower()
+    stored_text = fp.get("textContent", "")
+    attributes = fp.get("attributes", {})
+    ancestor_tags = fp.get("ancestorTags", [])
+    nearest_id = fp.get("nearestIdAncestor")
+    nearest_heading = fp.get("nearestHeading")
+
+    if not tag_name:
+        return None
+
+    # 1. Stable attribute match -- tagName + any stored stable attribute
+    for attr in _STABLE_ATTRS:
+        val = attributes.get(attr)
+        if val:
+            candidates = soup.find_all(tag_name, attrs={attr: val})
+            if len(candidates) == 1:
+                result = _result_from_element(candidates[0])
+                if result:
+                    logger.info("  [fingerprint] matched via %s=%s", attr, val)
+                    return result
+            elif candidates:
+                # Multiple matches -- try to narrow by text
+                for c in candidates:
+                    if _text_overlaps(stored_text, c.get_text(strip=True)):
+                        result = _result_from_element(c)
+                        if result:
+                            logger.info("  [fingerprint] matched via %s=%s + text", attr, val)
+                            return result
+
+    # 2. ID-anchored text match
+    if nearest_id:
+        anchor = soup.find(id=nearest_id)
+        if anchor:
+            descendants = anchor.find_all(tag_name)
+            for el in descendants:
+                if _text_overlaps(stored_text, el.get_text(strip=True)):
+                    result = _result_from_element(el)
+                    if result:
+                        logger.info("  [fingerprint] matched via id-anchor #%s + text", nearest_id)
+                        return result
+
+    # 3. Heading-anchored text match
+    if nearest_heading:
+        normalized_heading = _normalize_ws(nearest_heading)
+        for h_tag in ["h1", "h2", "h3", "h4", "h5", "h6"]:
+            for h in soup.find_all(h_tag):
+                if normalized_heading in _normalize_ws(h.get_text(strip=True)):
+                    # Search siblings and nearby elements
+                    parent = h.parent
+                    if parent:
+                        for el in parent.find_all(tag_name):
+                            if _text_overlaps(stored_text, el.get_text(strip=True)):
+                                result = _result_from_element(el)
+                                if result:
+                                    logger.info("  [fingerprint] matched via heading-anchor + text")
+                                    return result
+
+    # 4. Global text match -- find all tagName elements with matching text, prefer closest ancestor match
+    all_candidates = soup.find_all(tag_name)
+    text_matches: list[tuple[int, Tag]] = []
+    for el in all_candidates:
+        if _text_overlaps(stored_text, el.get_text(strip=True)):
+            score = _ancestor_tags_score(ancestor_tags, el) if ancestor_tags else 0
+            text_matches.append((score, el))
+
+    if text_matches:
+        text_matches.sort(key=lambda x: x[0], reverse=True)
+        result = _result_from_element(text_matches[0][1])
+        if result:
+            logger.info("  [fingerprint] matched via global text (ancestor score=%d)", text_matches[0][0])
+            return result
+
+    return None
 
 
 # --- Meta tag extraction ---

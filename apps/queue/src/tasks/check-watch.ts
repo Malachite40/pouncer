@@ -45,6 +45,7 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
     const result = await checkWatchWithScraper({
         url: watch.url,
         cssSelector: watch.cssSelector,
+        elementFingerprint: watch.elementFingerprint,
     });
 
     const price = result.price ?? null;

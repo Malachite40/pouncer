@@ -35,6 +35,7 @@ export const watchRouter = createTRPCRouter({
                 name: z.string().min(1),
                 checkType: z.enum(['price', 'stock', 'both']).default('both'),
                 cssSelector: z.string().nullable().optional(),
+                elementFingerprint: z.string().nullable().optional(),
                 imageUrl: z.string().url().nullable().optional(),
                 checkIntervalSeconds: z
                     .number()
@@ -83,6 +84,8 @@ export const watchRouter = createTRPCRouter({
                             checkType: mergedType,
                             cssSelector:
                                 input.cssSelector ?? existing.cssSelector,
+                            elementFingerprint:
+                                input.elementFingerprint ?? existing.elementFingerprint,
                             imageUrl:
                                 input.imageUrl ?? existing.imageUrl,
                             checkIntervalSeconds: input.checkIntervalSeconds,
@@ -125,6 +128,7 @@ export const watchRouter = createTRPCRouter({
                     name: input.name,
                     checkType: input.checkType,
                     cssSelector: input.cssSelector ?? null,
+                    elementFingerprint: input.elementFingerprint ?? null,
                     imageUrl: input.imageUrl ?? null,
                     checkIntervalSeconds: input.checkIntervalSeconds,
                     notifyPriceDrop: input.notifyPriceDrop,
@@ -369,6 +373,7 @@ export const watchRouter = createTRPCRouter({
                 name: z.string().min(1).optional(),
                 checkType: z.enum(['price', 'stock', 'both']).optional(),
                 cssSelector: z.string().nullable().optional(),
+                elementFingerprint: z.string().nullable().optional(),
                 imageUrl: z.string().url().nullable().optional(),
                 isActive: z.boolean().optional(),
                 checkIntervalSeconds: z

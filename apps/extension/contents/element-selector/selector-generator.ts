@@ -36,6 +36,66 @@ export function generateSelector(element: Element): string {
     return buildFullPath(element);
 }
 
+export interface ElementFingerprint {
+    tagName: string;
+    textContent: string;
+    attributes: Record<string, string>;
+    ancestorTags: string[];
+    nearestIdAncestor: string | null;
+    nearestHeading: string | null;
+}
+
+const STABLE_ATTRIBUTES = [
+    'data-testid', 'data-test-id', 'data-qa', 'data-cy',
+    'data-product-id', 'data-price', 'data-sku',
+    'itemprop', 'role', 'type', 'name', 'aria-label',
+];
+
+export function generateElementFingerprint(element: Element): ElementFingerprint {
+    const tagName = element.tagName.toLowerCase();
+
+    const text = (element as HTMLElement).innerText || element.textContent || '';
+    const textContent = text.trim().replace(/\s+/g, ' ').slice(0, 200);
+
+    const attributes: Record<string, string> = {};
+    for (const attr of STABLE_ATTRIBUTES) {
+        const value = element.getAttribute(attr);
+        if (value) attributes[attr] = value;
+    }
+
+    const ancestorTags: string[] = [];
+    let current: Element | null = element.parentElement;
+    while (current && current !== document.documentElement && ancestorTags.length < 10) {
+        ancestorTags.unshift(current.tagName.toLowerCase());
+        current = current.parentElement;
+    }
+
+    let nearestIdAncestor: string | null = null;
+    current = element.parentElement;
+    while (current && current !== document.documentElement) {
+        if (current.id && !isGeneratedId(current.id)) {
+            nearestIdAncestor = current.id;
+            break;
+        }
+        current = current.parentElement;
+    }
+
+    let nearestHeading: string | null = null;
+    for (const level of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) {
+        const headings = document.querySelectorAll(level);
+        for (const h of headings) {
+            const hText = h.textContent?.trim();
+            if (hText) {
+                nearestHeading = hText.slice(0, 100);
+                break;
+            }
+        }
+        if (nearestHeading) break;
+    }
+
+    return { tagName, textContent, attributes, ancestorTags, nearestIdAncestor, nearestHeading };
+}
+
 export function getElementText(el: Element): string {
     const text = (el as HTMLElement).innerText || el.textContent || '';
     return text.trim().replace(/\s+/g, ' ').slice(0, 100);
@@ -69,6 +129,16 @@ function isMeaningfulClass(cls: string): boolean {
     if (cls.startsWith('pounce-')) return false;
     // CSS Module hashes
     if (/^[a-zA-Z]+_[a-zA-Z0-9_]{5,}$/.test(cls)) return false;
+    // Emotion: css-1a2b3c
+    if (/^css-[a-z0-9]+$/i.test(cls)) return false;
+    // Styled-components: sc-bdnxRM
+    if (/^sc-[a-zA-Z]{4,}$/.test(cls)) return false;
+    // CSS Modules BEM with hash: header-module--nav--3kF2x
+    if (/^[\w-]+--[\w-]+--[a-zA-Z0-9]{3,8}$/.test(cls)) return false;
+    // Broader CSS Module hashes (prefix-hash or prefix_hash with 5+ char hash)
+    if (/^[a-zA-Z][\w-]*[-_][a-zA-Z0-9]{5,}$/.test(cls)) return false;
+    // Short atomic classes with digits: x3f, _a1
+    if (/^[a-zA-Z_][a-zA-Z0-9_]{0,3}$/.test(cls) && /\d/.test(cls)) return false;
     // Tailwind patterns: single-word utilities with values like px-4, text-sm, bg-red-500
     if (/^-?[a-z]+-\[/.test(cls)) return false; // arbitrary values like w-[200px]
     if (/^(sm|md|lg|xl|2xl):/.test(cls)) return false; // responsive prefixes

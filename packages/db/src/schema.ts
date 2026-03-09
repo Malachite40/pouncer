@@ -72,6 +72,7 @@ export const watches = pgTable('watches', {
     name: text('name').notNull(),
     checkType: text('check_type').notNull().default('both'),
     cssSelector: text('css_selector'),
+    elementFingerprint: text('element_fingerprint'),
     imageUrl: text('image_url'),
     checkIntervalSeconds: integer('check_interval_seconds').notNull().default(900),
     lastPrice: numeric('last_price'),
