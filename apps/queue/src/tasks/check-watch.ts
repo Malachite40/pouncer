@@ -1,5 +1,5 @@
 import { checkResults, watches } from '@pounce/db/schema';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 
 import { db } from '../db';
 import { sendTelegramNotification } from '../lib/notifications';
@@ -28,6 +28,7 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
             and(
                 eq(watches.id, payload.watchId),
                 eq(watches.userId, payload.userId),
+                isNull(watches.deletedAt),
             ),
         );
 

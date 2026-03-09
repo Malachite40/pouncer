@@ -99,6 +99,7 @@ export const watches = pgTable('watches', {
     updatedAt: timestamp('updated_at', { withTimezone: true })
         .notNull()
         .defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
 });
 
 export const checkResults = pgTable('check_results', {

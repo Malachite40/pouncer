@@ -1,5 +1,5 @@
 import { checkResults, watches } from '@pounce/db/schema';
-import { and, count, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { enqueueWatchCheck } from '../queue/enqueue';
 import { authenticatedProcedure, createTRPCRouter } from '../trpc';
@@ -23,6 +23,7 @@ export const watchRouter = createTRPCRouter({
                     and(
                         eq(watches.userId, ctx.userId),
                         eq(watches.url, input.url),
+                        isNull(watches.deletedAt),
                     ),
                 );
             return watch ?? null;
@@ -69,6 +70,7 @@ export const watchRouter = createTRPCRouter({
                         and(
                             eq(watches.userId, ctx.userId),
                             eq(watches.url, input.url),
+                            isNull(watches.deletedAt),
                         ),
                     );
 
@@ -164,7 +166,7 @@ export const watchRouter = createTRPCRouter({
         return ctx.db
             .select()
             .from(watches)
-            .where(eq(watches.userId, ctx.userId))
+            .where(and(eq(watches.userId, ctx.userId), isNull(watches.deletedAt)))
             .orderBy(desc(watches.createdAt));
     }),
 
@@ -172,7 +174,7 @@ export const watchRouter = createTRPCRouter({
         const watchList = await ctx.db
             .select()
             .from(watches)
-            .where(eq(watches.userId, ctx.userId))
+            .where(and(eq(watches.userId, ctx.userId), isNull(watches.deletedAt)))
             .orderBy(desc(watches.createdAt));
 
         if (!watchList.length) {
@@ -245,6 +247,7 @@ export const watchRouter = createTRPCRouter({
                     and(
                         eq(watches.id, input.id),
                         eq(watches.userId, ctx.userId),
+                        isNull(watches.deletedAt),
                     ),
                 );
             if (!watch) return null;
@@ -273,6 +276,7 @@ export const watchRouter = createTRPCRouter({
                     and(
                         eq(watches.id, input.watchId),
                         eq(watches.userId, ctx.userId),
+                        isNull(watches.deletedAt),
                     ),
                 );
             if (!watch) return null;
@@ -340,6 +344,7 @@ export const watchRouter = createTRPCRouter({
                     and(
                         eq(watches.id, watchId),
                         eq(watches.userId, ctx.userId),
+                        isNull(watches.deletedAt),
                     ),
                 );
             if (!watch) return { items: [], page, totalItems: 0, totalPages: 0 };
@@ -442,7 +447,7 @@ export const watchRouter = createTRPCRouter({
                     const [current] = await ctx.db
                         .select({ checkIntervalSeconds: watches.checkIntervalSeconds })
                         .from(watches)
-                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)));
+                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId), isNull(watches.deletedAt)));
                     autoIntervalFields = {
                         autoInterval: true,
                         baseCheckIntervalSeconds: data.checkIntervalSeconds ?? current?.checkIntervalSeconds,
@@ -452,7 +457,7 @@ export const watchRouter = createTRPCRouter({
                     const [current] = await ctx.db
                         .select({ baseCheckIntervalSeconds: watches.baseCheckIntervalSeconds })
                         .from(watches)
-                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)));
+                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId), isNull(watches.deletedAt)));
                     autoIntervalFields = {
                         autoInterval: false,
                         ...(current?.baseCheckIntervalSeconds && {
@@ -471,7 +476,7 @@ export const watchRouter = createTRPCRouter({
                     ...autoIntervalFields,
                     updatedAt: new Date(),
                 })
-                .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)))
+                .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId), isNull(watches.deletedAt)))
                 .returning();
 
             if (
@@ -499,11 +504,13 @@ export const watchRouter = createTRPCRouter({
         .input(z.object({ id: z.string().uuid() }))
         .mutation(async ({ ctx, input }) => {
             await ctx.db
-                .delete(watches)
+                .update(watches)
+                .set({ deletedAt: new Date(), isActive: false })
                 .where(
                     and(
                         eq(watches.id, input.id),
                         eq(watches.userId, ctx.userId),
+                        isNull(watches.deletedAt),
                     ),
                 );
             return { success: true };
@@ -519,6 +526,7 @@ export const watchRouter = createTRPCRouter({
                     and(
                         eq(watches.id, input.id),
                         eq(watches.userId, ctx.userId),
+                        isNull(watches.deletedAt),
                     ),
                 );
             if (!watch) {

@@ -20,6 +20,7 @@ cron.schedule('*/5 * * * * *', async () => {
             .where(
                 and(
                     eq(watches.isActive, true),
+                    isNull(watches.deletedAt),
                     or(
                         isNull(watches.lastCheckedAt),
                         lte(
