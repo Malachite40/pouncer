@@ -40,6 +40,7 @@ export function WatchCreatePage() {
     );
     const [checkIntervalSeconds, setCheckIntervalSeconds] = useState(900);
     const [cssSelector, setCssSelector] = useState('');
+    const [imageUrl, setImageUrl] = useState('');
     const [notifyPriceDrop, setNotifyPriceDrop] = useState(true);
     const [notifyPriceIncrease, setNotifyPriceIncrease] = useState(true);
     const [notifyStock, setNotifyStock] = useState(true);
@@ -100,6 +101,7 @@ export function WatchCreatePage() {
                             name,
                             checkType,
                             cssSelector: cssSelector || null,
+                            imageUrl: imageUrl || null,
                             checkIntervalSeconds,
                             notifyPriceDrop,
                             notifyPriceIncrease,
@@ -302,6 +304,19 @@ export function WatchCreatePage() {
                             placeholder=".product-price"
                             value={cssSelector}
                             onChange={(e) => setCssSelector(e.target.value)}
+                        />
+                    </Field>
+
+                    <Field
+                        label="Image URL"
+                        hint="Optional product image."
+                    >
+                        <Input
+                            id="imageUrl"
+                            type="url"
+                            placeholder="https://example.com/product.jpg"
+                            value={imageUrl}
+                            onChange={(e) => setImageUrl(e.target.value)}
                         />
                     </Field>
 

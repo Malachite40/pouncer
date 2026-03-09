@@ -52,6 +52,35 @@ export function detectPrice(element: Element): string | null {
     return match ? match[0] : null;
 }
 
+export function detectImageUrl(element: Element): string | null {
+    // 1. If selected element is an <img>, use its src
+    if (element instanceof HTMLImageElement && element.src) {
+        return element.src;
+    }
+
+    // 2. Check og:image meta tag
+    const ogImage = document.querySelector<HTMLMetaElement>(
+        'meta[property="og:image"]',
+    );
+    if (ogImage?.content) return ogImage.content;
+
+    // 3. Check twitter:image meta tag
+    const twitterImage = document.querySelector<HTMLMetaElement>(
+        'meta[name="twitter:image"]',
+    );
+    if (twitterImage?.content) return twitterImage.content;
+
+    // 4. Find first large image on page
+    const images = document.querySelectorAll<HTMLImageElement>('img');
+    for (const img of images) {
+        if (img.naturalWidth >= 200 && img.naturalHeight >= 200 && img.src) {
+            return img.src;
+        }
+    }
+
+    return null;
+}
+
 function cleanTitle(title: string): string {
     // Remove common site name suffixes like " - Amazon.com", " | eBay"
     return title

@@ -54,6 +54,7 @@ import {
     PauseIcon,
     PlayIcon,
     RefreshCwIcon,
+    SparklesIcon,
     TimerIcon,
     Trash2Icon,
 } from 'lucide-react';
@@ -61,6 +62,7 @@ import { keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Fragment, useEffect, useState } from 'react';
+import { TrendSummary } from './trend-summary';
 
 const INTERVAL_OPTIONS = [
     { value: '5', label: 'Every 5s', short: '5s' },
@@ -238,30 +240,39 @@ export function WatchDetailPage() {
             </Link>
             <section className="relative rounded-lg border border-border/80 bg-card/84">
                 <div className="relative overflow-hidden rounded-t bg-background/35">
-                    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 p-4 sm:p-5">
+                    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 p-5 sm:p-6">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                            <div className="min-w-0 max-w-xl">
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                    <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
-                                        History
-                                    </span>
-                                    <span className="text-[10px] uppercase tracking-[0.16em] text-primary/80">
-                                        {watch.checkType === 'stock'
-                                            ? 'Stock trend'
-                                            : 'Price trend'}{' '}
-                                        · {historyReadCount}{' '}
-                                        {watch.checkType === 'stock'
-                                            ? 'checks'
-                                            : 'reads'}
-                                    </span>
+                            <div className="flex min-w-0 max-w-xl items-start gap-3 sm:gap-4">
+                                {watch.imageUrl ? (
+                                    <img
+                                        src={watch.imageUrl}
+                                        alt=""
+                                        className="size-14 shrink-0 rounded-lg object-cover sm:size-20"
+                                    />
+                                ) : null}
+                                <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
+                                            History
+                                        </span>
+                                        <span className="text-[10px] uppercase tracking-[0.16em] text-primary/80">
+                                            {watch.checkType === 'stock'
+                                                ? 'Stock trend'
+                                                : 'Price trend'}{' '}
+                                            · {historyReadCount}{' '}
+                                            {watch.checkType === 'stock'
+                                                ? 'checks'
+                                                : 'reads'}
+                                        </span>
+                                    </div>
+                                    <h2 className="mt-2 truncate font-[family:var(--font-display)] text-xl uppercase tracking-[-0.04em] text-foreground sm:text-3xl sm:whitespace-normal sm:overflow-visible sm:text-clip">
+                                        {watch.name}
+                                    </h2>
                                 </div>
-                                <h2 className="mt-2 font-[family:var(--font-display)] text-2xl uppercase tracking-[-0.04em] text-foreground break-words sm:text-3xl">
-                                    {watch.name}
-                                </h2>
                             </div>
 
                             <div className="min-w-0 sm:text-right">
-                                <div className="pointer-events-auto mb-2 flex flex-wrap items-center gap-2 sm:mb-3 sm:justify-end">
+                                <div className="pointer-events-auto mb-2 flex flex-wrap items-center gap-2.5 sm:mb-3 sm:justify-end">
                                     <StatusBadge
                                         status={normalizeStatus(
                                             watch.lastStockStatus,
@@ -402,6 +413,21 @@ export function WatchDetailPage() {
                                                 </DropdownMenuSubContent>
                                             </DropdownMenuSub>
                                             <DropdownMenuItem
+                                                onSelect={(e) => {
+                                                    e.preventDefault();
+                                                    toggleActive.mutate({
+                                                        id,
+                                                        autoInterval: !watch.autoInterval,
+                                                    });
+                                                }}
+                                            >
+                                                <SparklesIcon />
+                                                Auto-adjust
+                                                <DropdownMenuShortcut>
+                                                    {watch.autoInterval ? 'On' : 'Off'}
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem
                                                 onSelect={() =>
                                                     setNotifDialogOpen(true)
                                                 }
@@ -450,16 +476,17 @@ export function WatchDetailPage() {
                                         <div className="mt-1 font-[family:var(--font-display)] text-2xl leading-none tracking-[-0.05em] text-foreground sm:text-4xl">
                                             {formatPrice(watch.lastPrice)}
                                         </div>
+                                        <TrendSummary watchId={id} />
                                     </>
                                 )}
                             </div>
                         </div>
                     </div>
 
-                    <div className="absolute inset-x-0 top-0 h-28 bg-linear-to-b from-background via-background/78 to-transparent sm:h-32" />
+                    <div className="absolute inset-x-0 top-0 h-32 bg-linear-to-b from-background via-background/78 to-transparent sm:h-36" />
                     <PriceHistoryChart
                         data={chartHistoryData}
-                        className="h-64 sm:h-72"
+                        className="h-56 sm:h-72"
                         hideXAxis
                         mode={
                             checkType === 'stock'
@@ -472,7 +499,7 @@ export function WatchDetailPage() {
                 </div>
 
                 {manualCheckError ? (
-                    <p className="px-4 pt-4 text-[11px] uppercase tracking-[0.14em] text-destructive sm:px-5">
+                    <p className="px-5 pt-5 text-[11px] uppercase tracking-[0.14em] text-destructive sm:px-6">
                         {manualCheckError}
                     </p>
                 ) : null}
@@ -487,7 +514,7 @@ export function WatchDetailPage() {
                                 return (
                                     <Fragment key={check.id}>
                                         <div
-                                            className={`flex items-center justify-between border-t border-border/30 px-4 py-1.5${hasError ? ' cursor-pointer active:bg-muted/30' : ''}`}
+                                            className={`flex items-center justify-between border-t border-border/30 px-5 py-2.5${hasError ? ' cursor-pointer active:bg-muted/30' : ''}`}
                                             onClick={hasError ? () => setExpandedErrorId(isExpanded ? null : check.id) : undefined}
                                         >
                                             <span className="text-[11px] tabular-nums text-foreground/58">
@@ -502,7 +529,7 @@ export function WatchDetailPage() {
                                             </div>
                                         </div>
                                         {isExpanded && (
-                                            <div className="border-t border-border/10 px-4 py-2 text-xs leading-5 text-destructive/90">
+                                            <div className="border-t border-border/10 px-5 py-3 text-xs leading-5 text-destructive/90">
                                                 {check.error}
                                             </div>
                                         )}
@@ -565,7 +592,7 @@ export function WatchDetailPage() {
 
                         {/* Pagination controls */}
                         {totalPages > 1 && (
-                            <div className="flex items-center justify-between border-t border-border/30 px-4 py-2 sm:px-5">
+                            <div className="flex items-center justify-between border-t border-border/30 px-5 py-3 sm:px-6">
                                 <Button
                                     variant="ghost"
                                     size="sm"

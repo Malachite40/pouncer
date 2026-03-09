@@ -6,6 +6,7 @@ interface CreateWatchInput {
     name: string;
     checkType: 'price' | 'stock' | 'both';
     cssSelector: string;
+    imageUrl: string | null;
     skipMerge: boolean;
 }
 
@@ -72,6 +73,7 @@ export async function createWatch(
                     name: input.name,
                     checkType: input.checkType,
                     cssSelector: input.cssSelector,
+                    imageUrl: input.imageUrl,
                     skipMerge: input.skipMerge,
                 },
             }),

@@ -1,5 +1,5 @@
 import type { Message } from '~lib/messages';
-import { detectCheckType, detectName, detectPrice } from './detector';
+import { detectCheckType, detectImageUrl, detectName, detectPrice } from './detector';
 import { generateSelector } from './selector-generator';
 import { injectStyles, removeStyles, removeToast, showToast } from './styles';
 import {
@@ -184,6 +184,7 @@ async function handleClick(e: Event): Promise<void> {
     const name = detectName();
     const checkType = detectCheckType(element);
     const price = detectPrice(element);
+    const imageUrl = detectImageUrl(element);
 
     // Remove highlight and exit selection mode
     element.classList.remove('pounce-highlight');
@@ -219,6 +220,7 @@ async function handleClick(e: Event): Promise<void> {
             checkType: defaultCheckType,
             cssSelector,
             price,
+            imageUrl,
             rect,
             existingWatch,
         });
@@ -233,6 +235,7 @@ async function handleClick(e: Event): Promise<void> {
                 cssSelector,
                 name: result.name,
                 checkType: result.checkType,
+                imageUrl,
                 skipMerge: result.skipMerge,
             },
         });

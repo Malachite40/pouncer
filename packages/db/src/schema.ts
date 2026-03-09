@@ -72,6 +72,7 @@ export const watches = pgTable('watches', {
     name: text('name').notNull(),
     checkType: text('check_type').notNull().default('both'),
     cssSelector: text('css_selector'),
+    imageUrl: text('image_url'),
     checkIntervalSeconds: integer('check_interval_seconds').notNull().default(900),
     lastPrice: numeric('last_price'),
     lastStockStatus: text('last_stock_status'),
@@ -88,6 +89,8 @@ export const watches = pgTable('watches', {
     priceIncreaseTargetPrice: numeric('price_increase_target_price'),
     notifyCooldownSeconds: integer('notify_cooldown_seconds'),
     lastNotifiedAt: timestamp('last_notified_at', { withTimezone: true }),
+    autoInterval: boolean('auto_interval').notNull().default(false),
+    baseCheckIntervalSeconds: integer('base_check_interval_seconds'),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true })
         .notNull()

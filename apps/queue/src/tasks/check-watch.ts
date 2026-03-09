@@ -1,9 +1,13 @@
 import { checkResults, watches } from '@pounce/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import { db } from '../db';
 import { sendTelegramNotification } from '../lib/notifications';
 import { checkWatchWithScraper } from '../lib/scraper';
+import {
+    computeVolatility,
+    getAdjustedIntervalTier,
+} from '../lib/volatility';
 import { buildWatchNotifications } from '../lib/watch-notifications';
 
 interface CheckWatchPayload {
@@ -81,6 +85,36 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
         }
     }
 
+    const autoIntervalUpdate: Record<string, unknown> = {};
+
+    if (watch.autoInterval && watch.baseCheckIntervalSeconds) {
+        const recentChecks = await db
+            .select({ price: checkResults.price })
+            .from(checkResults)
+            .where(eq(checkResults.watchId, watch.id))
+            .orderBy(desc(checkResults.checkedAt))
+            .limit(20);
+
+        const prices = recentChecks
+            .map((r) => (r.price ? Number(r.price) : null))
+            .filter((p): p is number => p !== null && !Number.isNaN(p));
+
+        if (prices.length >= 5) {
+            const cv = computeVolatility(prices);
+            const adjustedInterval = getAdjustedIntervalTier(
+                watch.baseCheckIntervalSeconds,
+                cv,
+            );
+
+            if (adjustedInterval !== watch.checkIntervalSeconds) {
+                autoIntervalUpdate.checkIntervalSeconds = adjustedInterval;
+                console.log(
+                    `[queue] Auto-interval for ${watch.id}: CV=${cv.toFixed(4)}, ${watch.checkIntervalSeconds}s -> ${adjustedInterval}s`,
+                );
+            }
+        }
+    }
+
     await db
         .update(watches)
         .set({
@@ -88,6 +122,7 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
             lastStockStatus: stockStatus ?? watch.lastStockStatus ?? null,
             lastCheckedAt: now,
             ...(notificationsSent > 0 && { lastNotifiedAt: now }),
+            ...autoIntervalUpdate,
             updatedAt: now,
         })
         .where(eq(watches.id, watch.id));

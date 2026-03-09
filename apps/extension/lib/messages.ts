@@ -8,6 +8,7 @@ export type Message =
               cssSelector: string;
               name: string;
               checkType: 'price' | 'stock' | 'both';
+              imageUrl: string | null;
               skipMerge: boolean;
           };
       }

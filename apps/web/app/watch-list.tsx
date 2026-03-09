@@ -2,6 +2,7 @@
 
 import {
   type WatchStatus,
+  computeSimpleTrend,
   countHistoryReads,
   getPriceHistoryData,
   normalizeStatus,
@@ -11,7 +12,15 @@ import { Button } from "@pounce/ui/components/button";
 import { Input } from "@pounce/ui/components/input";
 import { PriceHistoryChart } from "@pounce/ui/components/price-history-chart";
 import { useDebouncedValue } from "@pounce/ui/hooks/use-debounce";
-import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Minus,
+  Search,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 import Link from "next/link";
 import { parseAsStringLiteral, useQueryState } from "nuqs";
 import { useMemo } from "react";
@@ -204,6 +213,7 @@ export function WatchList() {
             watch.history,
             watch.checkType as "price" | "stock" | "both",
           );
+          const trend = computeSimpleTrend(watch.history);
 
           return (
             <article
@@ -212,16 +222,27 @@ export function WatchList() {
             >
               {/* Desktop layout */}
               <div className={`${boardColumnClassName} hidden lg:grid`}>
-                <div className="min-w-0 lg:pr-3">
-                  <Link
-                    href={`/watches/${watch.id}`}
-                    className="block truncate font-[family:var(--font-display)] text-lg leading-none tracking-[-0.04em] text-foreground transition-colors group-hover:text-primary"
-                  >
-                    {watch.name}
-                  </Link>
-                  <p className="mt-1 min-w-0 truncate text-sm leading-5 text-muted-foreground/90">
-                    {watch.url}
-                  </p>
+                <div className="flex min-w-0 items-center gap-3 lg:pr-3">
+                  {watch.imageUrl ? (
+                    <img
+                      src={watch.imageUrl}
+                      alt=""
+                      className="size-10 shrink-0 rounded-md object-cover"
+                    />
+                  ) : (
+                    <div className="size-10 shrink-0 rounded-md bg-muted" />
+                  )}
+                  <div className="min-w-0">
+                    <Link
+                      href={`/watches/${watch.id}`}
+                      className="block truncate font-[family:var(--font-display)] text-lg leading-none tracking-[-0.04em] text-foreground transition-colors group-hover:text-primary"
+                    >
+                      {watch.name}
+                    </Link>
+                    <p className="mt-1 min-w-0 truncate text-sm leading-5 text-muted-foreground/90">
+                      {watch.url}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 lg:pr-3">
@@ -235,9 +256,12 @@ export function WatchList() {
                   ) : null}
                 </div>
 
-                <span className="font-[family:var(--font-display)] text-lg leading-none tracking-[-0.03em] text-foreground tabular-nums lg:pr-3">
-                  {price}
-                </span>
+                <div className="lg:pr-3">
+                  <span className="font-[family:var(--font-display)] text-lg leading-none tracking-[-0.03em] text-foreground tabular-nums">
+                    {price}
+                  </span>
+                  {trend && <TrendIndicator trend={trend} />}
+                </div>
 
                 <div className="space-y-1 lg:pr-3">
                   <div className="text-xs text-muted-foreground">
@@ -275,12 +299,23 @@ export function WatchList() {
               {/* Mobile layout */}
               <div className="space-y-2 lg:hidden">
                 <div className="flex items-center justify-between gap-3">
-                  <Link
-                    href={`/watches/${watch.id}`}
-                    className="min-w-0 truncate font-[family:var(--font-display)] text-base leading-none tracking-[-0.04em] text-foreground transition-colors group-hover:text-primary"
-                  >
-                    {watch.name}
-                  </Link>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    {watch.imageUrl ? (
+                      <img
+                        src={watch.imageUrl}
+                        alt=""
+                        className="size-8 shrink-0 rounded object-cover"
+                      />
+                    ) : (
+                      <div className="size-8 shrink-0 rounded bg-muted" />
+                    )}
+                    <Link
+                      href={`/watches/${watch.id}`}
+                      className="min-w-0 truncate font-[family:var(--font-display)] text-base leading-none tracking-[-0.04em] text-foreground transition-colors group-hover:text-primary"
+                    >
+                      {watch.name}
+                    </Link>
+                  </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <StatusBadge status={status} short />
                     {!watch.isActive ? (
@@ -291,9 +326,12 @@ export function WatchList() {
                       </span>
                     ) : null}
                     {price && (
-                      <span className="font-[family:var(--font-display)] text-base leading-none tracking-[-0.03em] text-foreground tabular-nums">
-                        {price}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-[family:var(--font-display)] text-base leading-none tracking-[-0.03em] text-foreground tabular-nums">
+                          {price}
+                        </span>
+                        {trend && <TrendIndicator trend={trend} compact />}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -422,6 +460,48 @@ function formatLastChecked(value: Date | string | null) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function TrendIndicator({
+  trend,
+  compact,
+}: {
+  trend: { direction: "up" | "down" | "stable"; percentChange: number; spanLabel: string };
+  compact?: boolean;
+}) {
+  const Icon =
+    trend.direction === "up"
+      ? TrendingUp
+      : trend.direction === "down"
+        ? TrendingDown
+        : Minus;
+
+  const colorClass =
+    trend.direction === "down"
+      ? "text-emerald-400"
+      : trend.direction === "up"
+        ? "text-red-300"
+        : "text-muted-foreground";
+
+  if (compact) {
+    return (
+      <span className={`inline-flex items-center gap-0.5 ${colorClass}`}>
+        <Icon className="size-3" />
+      </span>
+    );
+  }
+
+  return (
+    <div className={`mt-0.5 flex items-center gap-1 ${colorClass}`}>
+      <Icon className="size-3" />
+      <span className="text-[10px] tabular-nums tracking-[0.06em]">
+        {trend.direction === "stable"
+          ? "Stable"
+          : `${trend.direction === "down" ? "" : "+"}${trend.percentChange}%`}
+      </span>
+      <span className="text-[9px] opacity-60">{trend.spanLabel}</span>
+    </div>
+  );
 }
 
 function formatNextCheck(

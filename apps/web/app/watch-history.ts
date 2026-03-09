@@ -82,6 +82,59 @@ export function getPriceHistoryData(
     return data;
 }
 
+export type SimpleTrend = {
+    direction: 'up' | 'down' | 'stable';
+    percentChange: number;
+    spanLabel: string;
+};
+
+export function computeSimpleTrend(
+    history: HistoryEntry[],
+): SimpleTrend | null {
+    const priceEntries = history
+        .filter(
+            (e) => e.price !== null && !Number.isNaN(Number.parseFloat(e.price!)),
+        )
+        .sort(
+            (a, b) =>
+                new Date(a.checkedAt).getTime() -
+                new Date(b.checkedAt).getTime(),
+        );
+
+    if (priceEntries.length < 2) return null;
+
+    const earliest = Number.parseFloat(priceEntries[0].price!);
+    const latest = Number.parseFloat(
+        priceEntries[priceEntries.length - 1].price!,
+    );
+
+    if (earliest === 0) return null;
+
+    const percentChange =
+        Math.round(((latest - earliest) / earliest) * 100 * 100) / 100;
+
+    const direction: 'up' | 'down' | 'stable' =
+        percentChange > 1 ? 'up' : percentChange < -1 ? 'down' : 'stable';
+
+    const firstTime = new Date(priceEntries[0].checkedAt).getTime();
+    const lastTime = new Date(
+        priceEntries[priceEntries.length - 1].checkedAt,
+    ).getTime();
+    const spanMs = lastTime - firstTime;
+    const spanHours = spanMs / (1000 * 60 * 60);
+
+    let spanLabel: string;
+    if (spanHours < 1) {
+        spanLabel = `${Math.round(spanMs / (1000 * 60))}m`;
+    } else if (spanHours < 24) {
+        spanLabel = `${Math.round(spanHours)}h`;
+    } else {
+        spanLabel = `${Math.round(spanHours / 24)}d`;
+    }
+
+    return { direction, percentChange, spanLabel };
+}
+
 export function countPricePoints(
     history: Array<{
         price: string | null;

@@ -103,6 +103,7 @@ interface ConfirmPanelOptions {
     checkType: 'price' | 'stock' | 'both';
     cssSelector: string;
     price: string | null;
+    imageUrl: string | null;
     rect: DOMRect;
     existingWatch: { id: string; name: string; checkType: string } | null;
 }
@@ -155,6 +156,14 @@ export function showConfirmPanel(
         title.textContent = isExisting ? 'Update Watch' : 'Create Watch';
         title.className = 'pounce-confirm-title';
         panel.appendChild(title);
+
+        // Image thumbnail
+        if (options.imageUrl) {
+            const img = document.createElement('img');
+            img.src = options.imageUrl;
+            img.style.cssText = 'width: 120px !important; height: 80px !important; object-fit: cover !important; border-radius: 6px !important; margin-bottom: 12px !important; display: block !important;';
+            panel.appendChild(img);
+        }
 
         // Existing watch banner
         let banner: HTMLElement | null = null;

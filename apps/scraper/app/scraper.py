@@ -1,7 +1,7 @@
+import glob as _glob
 import logging
-import os
-import signal
 import subprocess
+import threading
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -126,25 +126,33 @@ def _fetch_static_page(url: str) -> dict:
     return {"html": _decode_response_body(response)}
 
 
-def _kill_orphaned_chrome():
-    """Kill chrome processes orphaned to PID 1 (parent died without cleanup)."""
+_active_fetches = 0
+_active_fetches_lock = threading.Lock()
+
+
+def kill_all_chrome():
+    """Kill all chrome processes and clean up temp profile dirs."""
     try:
-        result = subprocess.run(
-            ["pgrep", "-P", "1", "-f", "chrome-linux/chrome"],
-            capture_output=True, text=True, timeout=5,
+        subprocess.run(
+            ["pkill", "-9", "-f", "chrome-linux/chrome"],
+            capture_output=True, timeout=5,
         )
-        for pid_str in result.stdout.strip().split("\n"):
-            if pid_str.strip():
-                try:
-                    os.kill(int(pid_str.strip()), signal.SIGKILL)
-                except (ProcessLookupError, ValueError):
-                    pass
     except Exception:
         pass
+    for d in _glob.glob("/tmp/playwright_chromiumdev_profile-*"):
+        try:
+            subprocess.run(["rm", "-rf", d], capture_output=True, timeout=5)
+        except Exception:
+            pass
 
 
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
+    global _active_fetches
     wait_selector = _get_wait_selector(url, css_selector)
+
+    with _active_fetches_lock:
+        _active_fetches += 1
+
     try:
         response = DynamicFetcher.fetch(
             url,
@@ -160,7 +168,12 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
             locale="en-US",
         )
     finally:
-        _kill_orphaned_chrome()
+        with _active_fetches_lock:
+            _active_fetches -= 1
+            should_cleanup = _active_fetches == 0
+        if should_cleanup:
+            kill_all_chrome()
+
     if response.status >= 400:
         return _error_result(f"HTTP {response.status}: {response.reason}")
 

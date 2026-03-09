@@ -1,5 +1,5 @@
 import { checkResults, watches } from '@pounce/db/schema';
-import { and, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { enqueueWatchCheck } from '../queue/enqueue';
 import { authenticatedProcedure, createTRPCRouter } from '../trpc';
@@ -35,6 +35,7 @@ export const watchRouter = createTRPCRouter({
                 name: z.string().min(1),
                 checkType: z.enum(['price', 'stock', 'both']).default('both'),
                 cssSelector: z.string().nullable().optional(),
+                imageUrl: z.string().url().nullable().optional(),
                 checkIntervalSeconds: z
                     .number()
                     .refine((v) =>
@@ -54,6 +55,7 @@ export const watchRouter = createTRPCRouter({
                 priceIncreasePercentThreshold: z.number().positive().max(100).nullable().optional(),
                 priceIncreaseTargetPrice: z.number().positive().nullable().optional(),
                 notifyCooldownSeconds: z.number().int().positive().nullable().optional(),
+                autoInterval: z.boolean().default(false),
                 skipMerge: z.boolean().default(false),
             }),
         )
@@ -81,6 +83,8 @@ export const watchRouter = createTRPCRouter({
                             checkType: mergedType,
                             cssSelector:
                                 input.cssSelector ?? existing.cssSelector,
+                            imageUrl:
+                                input.imageUrl ?? existing.imageUrl,
                             checkIntervalSeconds: input.checkIntervalSeconds,
                             notifyPriceDrop: input.notifyPriceDrop,
                             notifyPriceIncrease: input.notifyPriceIncrease,
@@ -92,6 +96,8 @@ export const watchRouter = createTRPCRouter({
                             priceIncreasePercentThreshold: input.priceIncreasePercentThreshold?.toString() ?? null,
                             priceIncreaseTargetPrice: input.priceIncreaseTargetPrice?.toString() ?? null,
                             notifyCooldownSeconds: input.notifyCooldownSeconds ?? null,
+                            autoInterval: input.autoInterval,
+                            ...(input.autoInterval && { baseCheckIntervalSeconds: input.checkIntervalSeconds }),
                             isActive: true,
                             updatedAt: new Date(),
                         })
@@ -119,6 +125,7 @@ export const watchRouter = createTRPCRouter({
                     name: input.name,
                     checkType: input.checkType,
                     cssSelector: input.cssSelector ?? null,
+                    imageUrl: input.imageUrl ?? null,
                     checkIntervalSeconds: input.checkIntervalSeconds,
                     notifyPriceDrop: input.notifyPriceDrop,
                     notifyPriceIncrease: input.notifyPriceIncrease,
@@ -130,6 +137,8 @@ export const watchRouter = createTRPCRouter({
                     priceIncreasePercentThreshold: input.priceIncreasePercentThreshold?.toString() ?? null,
                     priceIncreaseTargetPrice: input.priceIncreaseTargetPrice?.toString() ?? null,
                     notifyCooldownSeconds: input.notifyCooldownSeconds ?? null,
+                    autoInterval: input.autoInterval,
+                    ...(input.autoInterval && { baseCheckIntervalSeconds: input.checkIntervalSeconds }),
                     userId: ctx.userId,
                 })
                 .returning();
@@ -250,6 +259,65 @@ export const watchRouter = createTRPCRouter({
             return { ...watch, history };
         }),
 
+    trends: authenticatedProcedure
+        .input(z.object({ watchId: z.string().uuid() }))
+        .query(async ({ ctx, input }) => {
+            const [watch] = await ctx.db
+                .select({ id: watches.id })
+                .from(watches)
+                .where(
+                    and(
+                        eq(watches.id, input.watchId),
+                        eq(watches.userId, ctx.userId),
+                    ),
+                );
+            if (!watch) return null;
+
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+            const rows = await ctx.db
+                .select({
+                    price: checkResults.price,
+                    checkedAt: checkResults.checkedAt,
+                })
+                .from(checkResults)
+                .where(
+                    and(
+                        eq(checkResults.watchId, input.watchId),
+                        gte(checkResults.checkedAt, sevenDaysAgo),
+                    ),
+                )
+                .orderBy(checkResults.checkedAt);
+
+            const priceRows = rows.filter(
+                (r) => r.price !== null && !Number.isNaN(Number(r.price)),
+            );
+
+            if (priceRows.length < 2) return null;
+
+            const earliest = Number(priceRows[0].price);
+            const latest = Number(priceRows[priceRows.length - 1].price);
+            const prices = priceRows.map((r) => Number(r.price));
+
+            const percentChange7d =
+                earliest === 0 ? 0 : ((latest - earliest) / earliest) * 100;
+            const direction: 'up' | 'down' | 'stable' =
+                percentChange7d > 1
+                    ? 'up'
+                    : percentChange7d < -1
+                      ? 'down'
+                      : 'stable';
+
+            return {
+                currentPrice: latest,
+                price7dAgo: earliest,
+                percentChange7d: Math.round(percentChange7d * 100) / 100,
+                direction,
+                priceMin7d: Math.min(...prices),
+                priceMax7d: Math.max(...prices),
+            };
+        }),
+
     history: authenticatedProcedure
         .input(
             z.object({
@@ -301,6 +369,7 @@ export const watchRouter = createTRPCRouter({
                 name: z.string().min(1).optional(),
                 checkType: z.enum(['price', 'stock', 'both']).optional(),
                 cssSelector: z.string().nullable().optional(),
+                imageUrl: z.string().url().nullable().optional(),
                 isActive: z.boolean().optional(),
                 checkIntervalSeconds: z
                     .number()
@@ -321,11 +390,13 @@ export const watchRouter = createTRPCRouter({
                 priceIncreasePercentThreshold: z.number().positive().max(100).nullable().optional(),
                 priceIncreaseTargetPrice: z.number().positive().nullable().optional(),
                 notifyCooldownSeconds: z.number().int().positive().nullable().optional(),
+                autoInterval: z.boolean().optional(),
             }),
         )
         .mutation(async ({ ctx, input }) => {
             const {
                 id,
+                autoInterval,
                 priceDropThreshold,
                 priceDropPercentThreshold,
                 priceDropTargetPrice,
@@ -358,11 +429,41 @@ export const watchRouter = createTRPCRouter({
                     notifyCooldownSeconds: notifyCooldownSeconds ?? null,
                 }),
             };
+            // Handle autoInterval toggle
+            let autoIntervalFields: Record<string, unknown> = {};
+            if (autoInterval !== undefined) {
+                if (autoInterval) {
+                    // Enabling: save current interval as base
+                    const [current] = await ctx.db
+                        .select({ checkIntervalSeconds: watches.checkIntervalSeconds })
+                        .from(watches)
+                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)));
+                    autoIntervalFields = {
+                        autoInterval: true,
+                        baseCheckIntervalSeconds: data.checkIntervalSeconds ?? current?.checkIntervalSeconds,
+                    };
+                } else {
+                    // Disabling: restore base interval
+                    const [current] = await ctx.db
+                        .select({ baseCheckIntervalSeconds: watches.baseCheckIntervalSeconds })
+                        .from(watches)
+                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)));
+                    autoIntervalFields = {
+                        autoInterval: false,
+                        ...(current?.baseCheckIntervalSeconds && {
+                            checkIntervalSeconds: current.baseCheckIntervalSeconds,
+                        }),
+                        baseCheckIntervalSeconds: null,
+                    };
+                }
+            }
+
             const [updated] = await ctx.db
                 .update(watches)
                 .set({
                     ...data,
                     ...numericFields,
+                    ...autoIntervalFields,
                     updatedAt: new Date(),
                 })
                 .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId)))
