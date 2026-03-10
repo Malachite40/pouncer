@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     scrape_timeout: int = 15
     dynamic_timeout_ms: int = 30000
     dynamic_wait_ms: int = 1500
+    dynamic_fetch_retries: int = Field(default=2, ge=1, le=5)
+    dynamic_retry_backoff_ms: int = Field(default=1000, ge=0, le=10000)
     dynamic_wait_selector_state: str = "visible"
     dynamic_default_wait_selector: str = "body"
     max_content_length: int = 5000

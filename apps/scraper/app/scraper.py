@@ -1,6 +1,7 @@
 import glob as _glob
 import logging
 import subprocess
+import time
 import threading
 from collections.abc import Iterable
 from urllib.parse import urlparse
@@ -128,6 +129,7 @@ def _fetch_static_page(url: str) -> dict:
 
 
 _dynamic_fetch_sem = threading.Semaphore(1)
+_chrome_lifecycle_lock = threading.RLock()
 
 
 def _cleanup_profile_dirs(profile_dirs: Iterable[str]):
@@ -138,23 +140,40 @@ def _cleanup_profile_dirs(profile_dirs: Iterable[str]):
             logger.warning("Failed to remove Playwright profile dir %s", profile_dir, exc_info=True)
 
 
-def kill_all_chrome():
-    """Kill all chrome processes and clean up temp profile dirs."""
-    try:
-        result = subprocess.run(
-            ["pkill", "-9", "-f", "chrome-linux/chrome"],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-        if result.returncode == 0:
-            logger.info("Killed leaked chrome processes")
-    except FileNotFoundError:
-        logger.warning("Chrome cleanup skipped because pkill is not installed in the container")
-    except Exception:
-        logger.warning("Failed to kill leaked chrome processes", exc_info=True)
+def kill_all_chrome(*, skip_if_busy: bool = False) -> bool:
+    """Kill leaked chrome processes and clean up temp profile dirs."""
+    acquired = _chrome_lifecycle_lock.acquire(blocking=not skip_if_busy)
+    if not acquired:
+        logger.info("Skipped chrome cleanup because a dynamic fetch is in flight")
+        return False
 
-    _cleanup_profile_dirs(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
+    try:
+        try:
+            result = subprocess.run(
+                ["pkill", "-9", "-f", "chrome-linux/chrome"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            if result.returncode == 0:
+                logger.info("Killed leaked chrome processes")
+        except FileNotFoundError:
+            logger.warning("Chrome cleanup skipped because pkill is not installed in the container")
+        except Exception:
+            logger.warning("Failed to kill leaked chrome processes", exc_info=True)
+
+        _cleanup_profile_dirs(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
+        return True
+    finally:
+        _chrome_lifecycle_lock.release()
+
+
+def _is_transient_browser_close(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "target page, context or browser has been closed" in message
+        or "browsercontext.new_page: target page, context or browser has been closed" in message
+    )
 
 
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
@@ -164,25 +183,37 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
     response = None
     dirs_before = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
     try:
-        try:
-            response = DynamicFetcher.fetch(
-                url,
-                headless=True,
-                timeout=settings.dynamic_timeout_ms,
-                wait=settings.dynamic_wait_ms,
-                wait_selector=wait_selector,
-                wait_selector_state=settings.dynamic_wait_selector_state,
-                disable_resources=False,
-                google_search=True,
-                locale="en-US",
-            )
-        except Exception:
-            logger.exception("Dynamic fetch crashed for %s", url)
-            kill_all_chrome()
-            raise
-        finally:
-            dirs_after = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
-            _cleanup_profile_dirs(dirs_after - dirs_before)
+        with _chrome_lifecycle_lock:
+            try:
+                for attempt in range(1, settings.dynamic_fetch_retries + 1):
+                    try:
+                        response = DynamicFetcher.fetch(
+                            url,
+                            headless=True,
+                            timeout=settings.dynamic_timeout_ms,
+                            wait=settings.dynamic_wait_ms,
+                            wait_selector=wait_selector,
+                            wait_selector_state=settings.dynamic_wait_selector_state,
+                            disable_resources=False,
+                            google_search=True,
+                            locale="en-US",
+                        )
+                        break
+                    except Exception as exc:
+                        logger.exception("Dynamic fetch crashed for %s on attempt %d", url, attempt)
+                        kill_all_chrome()
+                        if attempt >= settings.dynamic_fetch_retries or not _is_transient_browser_close(exc):
+                            raise
+                        backoff_s = settings.dynamic_retry_backoff_ms / 1000
+                        logger.warning(
+                            "Retrying dynamic fetch for %s after transient browser-close error in %.2fs",
+                            url,
+                            backoff_s,
+                        )
+                        time.sleep(backoff_s)
+            finally:
+                dirs_after = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
+                _cleanup_profile_dirs(dirs_after - dirs_before)
     finally:
         _dynamic_fetch_sem.release()
 

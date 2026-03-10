@@ -87,8 +87,8 @@ async def _shutdown():
 async def _cleanup_loop():
     while True:
         await asyncio.sleep(60)
-        kill_all_chrome()
-        logger.info("Periodic chrome cleanup ran")
+        if kill_all_chrome(skip_if_busy=True):
+            logger.info("Periodic chrome cleanup ran")
 
 
 async def _scrape_worker(index: int):
