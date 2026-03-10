@@ -149,6 +149,8 @@ def kill_all_chrome():
         )
         if result.returncode == 0:
             logger.info("Killed leaked chrome processes")
+    except FileNotFoundError:
+        logger.warning("Chrome cleanup skipped because pkill is not installed in the container")
     except Exception:
         logger.warning("Failed to kill leaked chrome processes", exc_info=True)
 

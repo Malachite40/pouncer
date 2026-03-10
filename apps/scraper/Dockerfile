@@ -6,9 +6,10 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.6.6 /uv /usr/local/bin/uv
 ENV UV_PYTHON_PREFERENCE=only-system
 
-# Install curl for healthcheck
+# Install curl for healthcheck and procps for pkill-based Chrome cleanup
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl && rm -rf /var/lib/apt/lists/*
+    curl \
+    procps && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN groupadd --system --gid 1001 appgroup && \
