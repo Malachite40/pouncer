@@ -9,7 +9,7 @@ from pythonjsonlogger.json import JsonFormatter
 
 from .config import settings
 from .models import CheckRequest, CheckResponse
-from .scraper import _active_fetches, _active_fetches_lock, kill_all_chrome, scrape_product
+from .scraper import kill_all_chrome, scrape_product
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(
@@ -24,14 +24,11 @@ logging.root.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 def _periodic_chrome_cleanup():
-    """Kill leaked chrome processes every 60s when no fetches are active."""
+    """Kill leaked chrome processes every 60s."""
     while True:
         time.sleep(60)
-        with _active_fetches_lock:
-            active = _active_fetches
-        if active == 0:
-            kill_all_chrome()
-            logger.info("Periodic chrome cleanup ran")
+        kill_all_chrome()
+        logger.info("Periodic chrome cleanup ran")
 
 threading.Thread(target=_periodic_chrome_cleanup, daemon=True).start()
 

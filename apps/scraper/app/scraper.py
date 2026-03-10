@@ -130,17 +130,18 @@ def _fetch_static_page(url: str) -> dict:
     return {"html": _decode_response_body(response)}
 
 
-_active_fetches = 0
-_active_fetches_lock = threading.Lock()
+_dynamic_fetch_sem = threading.Semaphore(3)
 
 
 def kill_all_chrome():
     """Kill all chrome processes and clean up temp profile dirs."""
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["pkill", "-9", "-f", "chrome-linux/chrome"],
             capture_output=True, timeout=5,
         )
+        if result.returncode == 0:
+            logger.info("Killed leaked chrome processes")
     except Exception:
         pass
     for d in _glob.glob("/tmp/playwright_chromiumdev_profile-*"):
@@ -151,32 +152,37 @@ def kill_all_chrome():
 
 
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
-    global _active_fetches
     wait_selector = _get_wait_selector(url, css_selector)
 
-    with _active_fetches_lock:
-        _active_fetches += 1
-
+    _dynamic_fetch_sem.acquire()
     try:
-        response = DynamicFetcher.fetch(
-            url,
-            headless=True,
-            network_idle=True,
-            load_dom=True,
-            timeout=settings.dynamic_timeout_ms,
-            wait=settings.dynamic_wait_ms,
-            wait_selector=wait_selector,
-            wait_selector_state=settings.dynamic_wait_selector_state,
-            disable_resources=False,
-            google_search=True,
-            locale="en-US",
-        )
+        # Snapshot temp dirs before this fetch
+        dirs_before = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
+
+        try:
+            response = DynamicFetcher.fetch(
+                url,
+                headless=True,
+                network_idle=True,
+                load_dom=True,
+                timeout=settings.dynamic_timeout_ms,
+                wait=settings.dynamic_wait_ms,
+                wait_selector=wait_selector,
+                wait_selector_state=settings.dynamic_wait_selector_state,
+                disable_resources=False,
+                google_search=True,
+                locale="en-US",
+            )
+        finally:
+            # Clean up temp dirs created by THIS fetch
+            dirs_after = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
+            for d in dirs_after - dirs_before:
+                try:
+                    subprocess.run(["rm", "-rf", d], capture_output=True, timeout=5)
+                except Exception:
+                    pass
     finally:
-        with _active_fetches_lock:
-            _active_fetches -= 1
-            should_cleanup = _active_fetches == 0
-        if should_cleanup:
-            kill_all_chrome()
+        _dynamic_fetch_sem.release()
 
     if response.status >= 400:
         return _error_result(f"HTTP {response.status}: {response.reason}")
