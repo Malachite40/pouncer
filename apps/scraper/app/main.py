@@ -1,8 +1,9 @@
+import asyncio
 import logging
 import sys
-import threading
-import time
 
+from anyio import CapacityLimiter
+from anyio.to_thread import run_sync
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pythonjsonlogger.json import JsonFormatter
@@ -23,14 +24,8 @@ logging.root.addHandler(handler)
 logging.root.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
-def _periodic_chrome_cleanup():
-    """Kill leaked chrome processes every 60s."""
-    while True:
-        time.sleep(60)
-        kill_all_chrome()
-        logger.info("Periodic chrome cleanup ran")
-
-threading.Thread(target=_periodic_chrome_cleanup, daemon=True).start()
+# Limit concurrent scrape threads to 2 (1 dynamic at a time + 1 static-only)
+_scrape_limiter = CapacityLimiter(2)
 
 app = FastAPI(title="Pounce Scraper")
 
@@ -42,14 +37,27 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def _start_cleanup_loop():
+    async def _cleanup():
+        while True:
+            await asyncio.sleep(60)
+            kill_all_chrome()
+            logger.info("Periodic chrome cleanup ran")
+    asyncio.create_task(_cleanup())
+
+
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
 @app.post("/check", response_model=CheckResponse)
-def check(request: CheckRequest):
+async def check(request: CheckRequest):
     logger.info("Check request: url=%r, css_selector=%r, has_fingerprint=%s", request.url, request.css_selector, request.element_fingerprint is not None)
-    result = scrape_product(request.url, request.css_selector, request.element_fingerprint)
+    result = await run_sync(
+        lambda: scrape_product(request.url, request.css_selector, request.element_fingerprint),
+        limiter=_scrape_limiter,
+    )
     logger.info("Result: price=%s, stock=%s, error=%s", result["price"], result["stock_status"], result["error"])
     return CheckResponse(**result)
