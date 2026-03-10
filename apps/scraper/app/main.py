@@ -10,7 +10,7 @@ from pythonjsonlogger.json import JsonFormatter
 
 from .config import settings
 from .models import CheckRequest, CheckResponse
-from .scraper import kill_all_chrome, scrape_product
+from .scraper import scrape_product
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(
@@ -53,7 +53,6 @@ async def _startup():
         asyncio.create_task(_scrape_worker(index))
         for index in range(settings.scrape_workers)
     ]
-    app.state.cleanup_task = asyncio.create_task(_cleanup_loop())
     logger.info(
         "Scraper started with workers=%d queue_size=%d",
         settings.scrape_workers,
@@ -63,12 +62,6 @@ async def _startup():
 
 @app.on_event("shutdown")
 async def _shutdown():
-    cleanup_task = getattr(app.state, "cleanup_task", None)
-    if cleanup_task is not None:
-        cleanup_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await cleanup_task
-
     worker_tasks = getattr(app.state, "worker_tasks", [])
     for task in worker_tasks:
         task.cancel()
@@ -80,15 +73,7 @@ async def _shutdown():
     if executor is not None:
         executor.shutdown(wait=False, cancel_futures=True)
 
-    kill_all_chrome()
     logger.info("Scraper shutdown complete")
-
-
-async def _cleanup_loop():
-    while True:
-        await asyncio.sleep(60)
-        if kill_all_chrome(skip_if_busy=True):
-            logger.info("Periodic chrome cleanup ran")
 
 
 async def _scrape_worker(index: int):

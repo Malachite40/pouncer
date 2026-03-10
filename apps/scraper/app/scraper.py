@@ -1,13 +1,11 @@
-import glob as _glob
 import logging
-import subprocess
+import shutil
+import tempfile
 import time
-import threading
-from collections.abc import Iterable
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-from scrapling.fetchers import DynamicFetcher, Fetcher
+from scrapling.fetchers import DynamicSession, Fetcher
 
 from .config import settings
 from .hosts import _extract_host_specific
@@ -127,45 +125,20 @@ def _fetch_static_page(url: str) -> dict:
 
     return {"html": _decode_response_body(response)}
 
-
-_dynamic_fetch_sem = threading.Semaphore(1)
-_chrome_lifecycle_lock = threading.RLock()
+_DYNAMIC_PROFILE_PREFIX = "pounce-playwright-profile-"
 
 
-def _cleanup_profile_dirs(profile_dirs: Iterable[str]):
-    for profile_dir in profile_dirs:
-        try:
-            subprocess.run(["rm", "-rf", profile_dir], capture_output=True, timeout=5, check=False)
-        except Exception:
-            logger.warning("Failed to remove Playwright profile dir %s", profile_dir, exc_info=True)
+def _create_dynamic_profile_dir() -> str:
+    return tempfile.mkdtemp(prefix=_DYNAMIC_PROFILE_PREFIX)
 
 
-def kill_all_chrome(*, skip_if_busy: bool = False) -> bool:
-    """Kill leaked chrome processes and clean up temp profile dirs."""
-    acquired = _chrome_lifecycle_lock.acquire(blocking=not skip_if_busy)
-    if not acquired:
-        logger.info("Skipped chrome cleanup because a dynamic fetch is in flight")
-        return False
-
+def _cleanup_profile_dir(profile_dir: str):
     try:
-        try:
-            result = subprocess.run(
-                ["pkill", "-9", "-f", "chrome-linux/chrome"],
-                capture_output=True,
-                timeout=5,
-                check=False,
-            )
-            if result.returncode == 0:
-                logger.info("Killed leaked chrome processes")
-        except FileNotFoundError:
-            logger.warning("Chrome cleanup skipped because pkill is not installed in the container")
-        except Exception:
-            logger.warning("Failed to kill leaked chrome processes", exc_info=True)
-
-        _cleanup_profile_dirs(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
-        return True
-    finally:
-        _chrome_lifecycle_lock.release()
+        shutil.rmtree(profile_dir, ignore_errors=False)
+    except FileNotFoundError:
+        return
+    except Exception:
+        logger.warning("Failed to remove Playwright profile dir %s", profile_dir, exc_info=True)
 
 
 def _is_transient_browser_close(exc: Exception) -> bool:
@@ -178,44 +151,44 @@ def _is_transient_browser_close(exc: Exception) -> bool:
 
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
     wait_selector = _get_wait_selector(url, css_selector)
-
-    _dynamic_fetch_sem.acquire()
     response = None
-    dirs_before = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
-    try:
-        with _chrome_lifecycle_lock:
-            try:
-                for attempt in range(1, settings.dynamic_fetch_retries + 1):
-                    try:
-                        response = DynamicFetcher.fetch(
-                            url,
-                            headless=True,
-                            timeout=settings.dynamic_timeout_ms,
-                            wait=settings.dynamic_wait_ms,
-                            wait_selector=wait_selector,
-                            wait_selector_state=settings.dynamic_wait_selector_state,
-                            disable_resources=False,
-                            google_search=True,
-                            locale="en-US",
-                        )
-                        break
-                    except Exception as exc:
-                        logger.exception("Dynamic fetch crashed for %s on attempt %d", url, attempt)
-                        kill_all_chrome()
-                        if attempt >= settings.dynamic_fetch_retries or not _is_transient_browser_close(exc):
-                            raise
-                        backoff_s = settings.dynamic_retry_backoff_ms / 1000
-                        logger.warning(
-                            "Retrying dynamic fetch for %s after transient browser-close error in %.2fs",
-                            url,
-                            backoff_s,
-                        )
-                        time.sleep(backoff_s)
-            finally:
-                dirs_after = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
-                _cleanup_profile_dirs(dirs_after - dirs_before)
-    finally:
-        _dynamic_fetch_sem.release()
+    for attempt in range(1, settings.dynamic_fetch_retries + 1):
+        profile_dir = _create_dynamic_profile_dir()
+        try:
+            logger.info(
+                "Dynamic fetch attempt %d for %s using profile_dir=%s",
+                attempt,
+                url,
+                profile_dir,
+            )
+            with DynamicSession(
+                headless=True,
+                timeout=settings.dynamic_timeout_ms,
+                wait=settings.dynamic_wait_ms,
+                wait_selector=wait_selector,
+                wait_selector_state=settings.dynamic_wait_selector_state,
+                disable_resources=False,
+                google_search=True,
+                locale="en-US",
+                user_data_dir=profile_dir,
+                retries=1,
+                retry_delay=0,
+            ) as session:
+                response = session.fetch(url)
+                break
+        except Exception as exc:
+            logger.exception("Dynamic fetch crashed for %s on attempt %d", url, attempt)
+            if attempt >= settings.dynamic_fetch_retries or not _is_transient_browser_close(exc):
+                raise
+            backoff_s = settings.dynamic_retry_backoff_ms / 1000
+            logger.warning(
+                "Retrying dynamic fetch for %s after transient browser-close error in %.2fs",
+                url,
+                backoff_s,
+            )
+            time.sleep(backoff_s)
+        finally:
+            _cleanup_profile_dir(profile_dir)
 
     if response is None:
         return _error_result("Dynamic fetch failed without a response")

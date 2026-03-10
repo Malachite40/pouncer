@@ -1,33 +1,97 @@
 from app import scraper
-import threading
 
 
-def test_dynamic_fetch_crash_triggers_cleanup(monkeypatch):
-    removed_dirs: list[str] = []
-    chrome_cleanup_calls: list[bool] = []
+def test_dynamic_fetch_uses_request_scoped_session_and_cleans_profile(monkeypatch):
+    cleaned_dirs: list[str] = []
 
-    glob_results = iter(
-        [
-            ["/tmp/playwright_chromiumdev_profile-existing"],
-            [
-                "/tmp/playwright_chromiumdev_profile-existing",
-                "/tmp/playwright_chromiumdev_profile-new",
-            ],
-        ]
-    )
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
-    monkeypatch.setattr(scraper._glob, "glob", lambda pattern: next(glob_results))
-    monkeypatch.setattr(
-        scraper.DynamicFetcher,
-        "fetch",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-    monkeypatch.setattr(scraper, "kill_all_chrome", lambda: chrome_cleanup_calls.append(True))
-    monkeypatch.setattr(
-        scraper,
-        "_cleanup_profile_dirs",
-        lambda dirs: removed_dirs.extend(sorted(dirs)),
-    )
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def fetch(self, url):
+            class Response:
+                status = 200
+                reason = "OK"
+                body = "<html><body>ok</body></html>"
+                encoding = "utf-8"
+
+            return Response()
+
+    monkeypatch.setattr(scraper, "_create_dynamic_profile_dir", lambda: "/tmp/pounce-profile-1")
+    monkeypatch.setattr(scraper, "_cleanup_profile_dir", lambda path: cleaned_dirs.append(path))
+    monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
+
+    result = scraper._fetch_dynamic_page("https://example.com/product")
+
+    assert result == {"html": "<html><body>ok</body></html>"}
+    assert cleaned_dirs == ["/tmp/pounce-profile-1"]
+
+
+def test_dynamic_fetch_retries_transient_target_closed_with_fresh_session(monkeypatch):
+    profile_dirs = iter(["/tmp/pounce-profile-1", "/tmp/pounce-profile-2"])
+    cleaned_dirs: list[str] = []
+    session_profile_dirs: list[str] = []
+    fetch_calls: list[str] = []
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            session_profile_dirs.append(kwargs["user_data_dir"])
+            self.profile_dir = kwargs["user_data_dir"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def fetch(self, url):
+            fetch_calls.append(self.profile_dir)
+            if len(fetch_calls) == 1:
+                raise RuntimeError("Target page, context or browser has been closed")
+
+            class Response:
+                status = 200
+                reason = "OK"
+                body = "<html><body>ok</body></html>"
+                encoding = "utf-8"
+
+            return Response()
+
+    monkeypatch.setattr(scraper, "_create_dynamic_profile_dir", lambda: next(profile_dirs))
+    monkeypatch.setattr(scraper, "_cleanup_profile_dir", lambda path: cleaned_dirs.append(path))
+    monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
+    monkeypatch.setattr(scraper.time, "sleep", lambda seconds: None)
+
+    result = scraper._fetch_dynamic_page("https://example.com/product")
+
+    assert result == {"html": "<html><body>ok</body></html>"}
+    assert session_profile_dirs == ["/tmp/pounce-profile-1", "/tmp/pounce-profile-2"]
+    assert fetch_calls == ["/tmp/pounce-profile-1", "/tmp/pounce-profile-2"]
+    assert cleaned_dirs == ["/tmp/pounce-profile-1", "/tmp/pounce-profile-2"]
+
+
+def test_dynamic_fetch_cleans_profile_when_session_raises(monkeypatch):
+    cleaned_dirs: list[str] = []
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            raise RuntimeError("boom")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(scraper, "_create_dynamic_profile_dir", lambda: "/tmp/pounce-profile-1")
+    monkeypatch.setattr(scraper, "_cleanup_profile_dir", lambda path: cleaned_dirs.append(path))
+    monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
 
     try:
         scraper._fetch_dynamic_page("https://example.com/product")
@@ -36,74 +100,4 @@ def test_dynamic_fetch_crash_triggers_cleanup(monkeypatch):
     else:
         raise AssertionError("Expected dynamic fetch to raise")
 
-    assert chrome_cleanup_calls == [True]
-    assert removed_dirs == ["/tmp/playwright_chromiumdev_profile-new"]
-
-
-def test_kill_all_chrome_skips_when_dynamic_fetch_active(monkeypatch):
-    calls: list[tuple[str, tuple[str, ...]]] = []
-    entered = threading.Event()
-    release = threading.Event()
-
-    monkeypatch.setattr(scraper._glob, "glob", lambda pattern: ["/tmp/playwright_chromiumdev_profile-stale"])
-    monkeypatch.setattr(
-        scraper.subprocess,
-        "run",
-        lambda args, **kwargs: calls.append(("run", tuple(args))),
-    )
-    monkeypatch.setattr(
-        scraper,
-        "_cleanup_profile_dirs",
-        lambda dirs: calls.append(("cleanup", tuple(dirs))),
-    )
-
-    def hold_lock():
-        with scraper._chrome_lifecycle_lock:
-            entered.set()
-            release.wait(timeout=2)
-
-    thread = threading.Thread(target=hold_lock)
-    thread.start()
-    assert entered.wait(timeout=2)
-    did_cleanup = scraper.kill_all_chrome(skip_if_busy=True)
-    release.set()
-    thread.join(timeout=2)
-
-    assert did_cleanup is False
-    assert calls == []
-
-
-def test_dynamic_fetch_retries_transient_target_closed(monkeypatch):
-    fetch_calls: list[int] = []
-    cleanup_calls: list[bool] = []
-
-    glob_results = iter(
-        [
-            ["/tmp/playwright_chromiumdev_profile-existing"],
-            ["/tmp/playwright_chromiumdev_profile-existing"],
-        ]
-    )
-
-    def fake_fetch(*args, **kwargs):
-        fetch_calls.append(1)
-        if len(fetch_calls) == 1:
-            raise RuntimeError("Target page, context or browser has been closed")
-
-        class Response:
-            status = 200
-            reason = "OK"
-            body = "<html><body>ok</body></html>"
-            encoding = "utf-8"
-
-        return Response()
-
-    monkeypatch.setattr(scraper._glob, "glob", lambda pattern: next(glob_results))
-    monkeypatch.setattr(scraper.DynamicFetcher, "fetch", fake_fetch)
-    monkeypatch.setattr(scraper, "kill_all_chrome", lambda **kwargs: cleanup_calls.append(True) or True)
-    monkeypatch.setattr(scraper.time, "sleep", lambda seconds: None)
-
-    result = scraper._fetch_dynamic_page("https://example.com/product")
-
-    assert result == {"html": "<html><body>ok</body></html>"}
-    assert len(fetch_calls) == 2
-    assert cleanup_calls == [True]
+    assert cleaned_dirs == ["/tmp/pounce-profile-1"]
