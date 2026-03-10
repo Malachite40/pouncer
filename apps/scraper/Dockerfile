@@ -1,9 +1,10 @@
-FROM python:3.12-slim-trixie
+FROM python:3.13-slim-trixie
 
 WORKDIR /app
 
 # Install uv for fast dependency management (pinned version)
 COPY --from=ghcr.io/astral-sh/uv:0.6.6 /uv /usr/local/bin/uv
+ENV UV_PYTHON_PREFERENCE=only-system
 
 # Install curl for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
