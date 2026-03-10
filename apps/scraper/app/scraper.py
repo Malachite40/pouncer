@@ -5,10 +5,6 @@ import threading
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-import scrapling.engines.constants as _scrapling_constants
-_scrapling_constants.DEFAULT_ARGS = _scrapling_constants.DEFAULT_ARGS + (
-    "--no-zygote", "--disable-gpu", "--single-process",
-)
 from scrapling.fetchers import DynamicFetcher, Fetcher
 
 from .config import settings
@@ -130,7 +126,7 @@ def _fetch_static_page(url: str) -> dict:
     return {"html": _decode_response_body(response)}
 
 
-_dynamic_fetch_sem = threading.Semaphore(3)
+_dynamic_fetch_sem = threading.Semaphore(1)
 
 
 def kill_all_chrome():
@@ -163,8 +159,6 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
             response = DynamicFetcher.fetch(
                 url,
                 headless=True,
-                network_idle=True,
-                load_dom=True,
                 timeout=settings.dynamic_timeout_ms,
                 wait=settings.dynamic_wait_ms,
                 wait_selector=wait_selector,
