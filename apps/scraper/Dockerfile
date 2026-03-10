@@ -24,9 +24,9 @@ RUN uv run playwright install-deps chromium && \
 COPY apps/scraper/app/ app/
 RUN uv sync --no-dev
 
-# Fix ownership
-RUN mkdir -p /home/appuser/.cache/uv && chown -R appuser:appgroup /home/appuser
-RUN chown -R appuser:appgroup /app
+# Fix ownership so non-root user can access venv + browsers
+RUN mkdir -p /home/appuser/.cache/uv && \
+    chown -R appuser:appgroup /home/appuser /app /opt/pw-browsers
 
 USER appuser
 
