@@ -2,6 +2,7 @@ import glob as _glob
 import logging
 import subprocess
 import threading
+from collections.abc import Iterable
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -129,32 +130,38 @@ def _fetch_static_page(url: str) -> dict:
 _dynamic_fetch_sem = threading.Semaphore(1)
 
 
+def _cleanup_profile_dirs(profile_dirs: Iterable[str]):
+    for profile_dir in profile_dirs:
+        try:
+            subprocess.run(["rm", "-rf", profile_dir], capture_output=True, timeout=5, check=False)
+        except Exception:
+            logger.warning("Failed to remove Playwright profile dir %s", profile_dir, exc_info=True)
+
+
 def kill_all_chrome():
     """Kill all chrome processes and clean up temp profile dirs."""
     try:
         result = subprocess.run(
             ["pkill", "-9", "-f", "chrome-linux/chrome"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
+            check=False,
         )
         if result.returncode == 0:
             logger.info("Killed leaked chrome processes")
     except Exception:
-        pass
-    for d in _glob.glob("/tmp/playwright_chromiumdev_profile-*"):
-        try:
-            subprocess.run(["rm", "-rf", d], capture_output=True, timeout=5)
-        except Exception:
-            pass
+        logger.warning("Failed to kill leaked chrome processes", exc_info=True)
+
+    _cleanup_profile_dirs(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
 
 
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
     wait_selector = _get_wait_selector(url, css_selector)
 
     _dynamic_fetch_sem.acquire()
+    response = None
+    dirs_before = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
     try:
-        # Snapshot temp dirs before this fetch
-        dirs_before = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
-
         try:
             response = DynamicFetcher.fetch(
                 url,
@@ -167,16 +174,18 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
                 google_search=True,
                 locale="en-US",
             )
+        except Exception:
+            logger.exception("Dynamic fetch crashed for %s", url)
+            kill_all_chrome()
+            raise
         finally:
-            # Clean up temp dirs created by THIS fetch
             dirs_after = set(_glob.glob("/tmp/playwright_chromiumdev_profile-*"))
-            for d in dirs_after - dirs_before:
-                try:
-                    subprocess.run(["rm", "-rf", d], capture_output=True, timeout=5)
-                except Exception:
-                    pass
+            _cleanup_profile_dirs(dirs_after - dirs_before)
     finally:
         _dynamic_fetch_sem.release()
+
+    if response is None:
+        return _error_result("Dynamic fetch failed without a response")
 
     if response.status >= 400:
         return _error_result(f"HTTP {response.status}: {response.reason}")

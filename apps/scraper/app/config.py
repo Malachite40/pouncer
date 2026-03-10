@@ -1,9 +1,12 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     port: int = 8001
     cors_origins: list[str] = ["http://localhost:3000"]
+    scrape_workers: int = Field(default=2, ge=1, le=8)
+    scrape_queue_size: int = Field(default=16, ge=1, le=256)
     scrape_timeout: int = 15
     dynamic_timeout_ms: int = 30000
     dynamic_wait_ms: int = 1500
