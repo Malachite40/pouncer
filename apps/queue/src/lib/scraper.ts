@@ -47,6 +47,22 @@ interface CheckWatchInput {
     elementFingerprint: string | null;
 }
 
+function normalizeScraperErrorDetail(detail: unknown) {
+    if (typeof detail === 'string') {
+        return detail;
+    }
+
+    if (detail == null) {
+        return null;
+    }
+
+    try {
+        return JSON.stringify(detail);
+    } catch {
+        return String(detail);
+    }
+}
+
 export async function checkWatchWithScraper({
     url,
     cssSelector,
@@ -69,30 +85,31 @@ export async function checkWatchWithScraper({
             });
 
             if (!response.ok) {
-                const body = (await response.json().catch(() => null)) as {
-                    detail?: string;
-                } | null;
+                const body = (await response.json().catch(() => null)) as
+                    | { detail?: unknown }
+                    | null;
                 const error =
-                    body?.detail ??
+                    normalizeScraperErrorDetail(body?.detail) ??
                     `Scraper request failed with status ${response.status}`;
                 return {
                     price: null,
                     stock_status: null,
                     raw_content: null,
                     error,
-                    errorType:
-                        response.status === 503
-                            ? 'scraper_overloaded'
-                            : classifyScraperError(error),
+                    errorType: classifyScraperError(
+                        error,
+                        response.status,
+                    ),
                 };
             }
 
+            const payload = (await response.json()) as Omit<
+                ScraperCheckOutcome,
+                'errorType'
+            >;
             return {
-                ...((await response.json()) as Omit<
-                    ScraperCheckOutcome,
-                    'errorType'
-                >),
-                errorType: null,
+                ...payload,
+                errorType: classifyScraperError(payload.error),
             };
         } catch (error) {
             const message = `Scraper request failed: ${error}`;
@@ -111,7 +128,16 @@ export async function checkWatchWithScraper({
 
 function classifyScraperError(
     error: string | null,
+    statusCode?: number,
 ): ScraperCheckOutcome['errorType'] {
+    if (statusCode === 503) {
+        return 'scraper_overloaded';
+    }
+
+    if (statusCode === 504) {
+        return 'transient';
+    }
+
     if (!error) {
         return null;
     }
@@ -120,6 +146,8 @@ function classifyScraperError(
     if (
         message.includes('at capacity') ||
         message.includes('queue is full') ||
+        message.includes('stuck_workers') ||
+        message.includes('scraper is at capacity') ||
         message.includes('503')
     ) {
         return 'scraper_overloaded';
@@ -128,12 +156,14 @@ function classifyScraperError(
     if (
         message.includes('aborterror') ||
         message.includes('timeout') ||
+        message.includes('timed out') ||
         message.includes('fetch failed') ||
         message.includes('browser has been closed') ||
         message.includes('econnreset') ||
         message.includes('etimedout') ||
         message.includes('enotfound') ||
         message.includes('http 429') ||
+        message.includes('http 504') ||
         message.includes('http 5')
     ) {
         return 'transient';
@@ -141,3 +171,8 @@ function classifyScraperError(
 
     return 'terminal';
 }
+
+export const __testables = {
+    classifyScraperError,
+    normalizeScraperErrorDetail,
+};

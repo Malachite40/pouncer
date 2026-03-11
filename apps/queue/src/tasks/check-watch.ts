@@ -8,7 +8,11 @@ import {
 } from '@pounce/trpc/queue';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 
-import { watchLeaseMs, watchRetryBackoffMs } from '../config';
+import {
+    watchLeaseMs,
+    watchOverloadBackoffMs,
+    watchRetryBackoffMs,
+} from '../config';
 import { db } from '../db';
 import { sendTelegramNotification } from '../lib/notifications';
 import { checkWatchWithScraper } from '../lib/scraper';
@@ -23,6 +27,11 @@ interface CheckWatchPayload {
 
 function nullIfUndefined<T>(value: T | undefined): T | null {
     return value ?? null;
+}
+
+function getJitteredBackoffMs(baseBackoffMs: number) {
+    const jitterWindow = Math.max(1_000, Math.floor(baseBackoffMs * 0.1));
+    return baseBackoffMs + Math.floor(Math.random() * jitterWindow);
 }
 
 export async function handleCheckWatch(payload: CheckWatchPayload) {
@@ -88,7 +97,7 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
                 watchId: watch.id,
                 userId: payload.userId,
                 now: new Date(),
-                backoffMs: watchRetryBackoffMs,
+                backoffMs: getJitteredBackoffMs(watchOverloadBackoffMs),
                 errorType: WATCH_CHECK_ERROR_TYPES.SCRAPER_OVERLOADED,
             });
             return { success: false, retrying: true };
@@ -201,3 +210,7 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
         throw error;
     }
 }
+
+export const __testables = {
+    getJitteredBackoffMs,
+};

@@ -50,3 +50,8 @@ export const watchRetryBackoffMs = parsePositiveInt(
     process.env.WATCH_CHECK_RETRY_BACKOFF_MS,
     60_000,
 );
+
+export const watchOverloadBackoffMs = parsePositiveInt(
+    process.env.WATCH_CHECK_OVERLOAD_BACKOFF_MS,
+    300_000,
+);
