@@ -57,7 +57,7 @@ function getSingleNotification(
 }
 
 test('builds price drop notification with inline buttons and no HTML link', () => {
-    process.env.APP_URL = 'https://app.pounce.test/';
+    process.env.NEXT_PUBLIC_BETTER_AUTH_URL = 'https://app.pounce.test/';
 
     const notification = getSingleNotification(
         {},
@@ -79,8 +79,8 @@ test('builds price drop notification with inline buttons and no HTML link', () =
     );
 });
 
-test('omits the Pounce deep link when APP_URL is local or non-https', () => {
-    process.env.APP_URL = 'http://localhost:3020';
+test('omits the Pounce deep link when NEXT_PUBLIC_BETTER_AUTH_URL is local or non-https', () => {
+    process.env.NEXT_PUBLIC_BETTER_AUTH_URL = 'http://localhost:3020';
 
     const notification = getSingleNotification(
         {},
@@ -148,7 +148,7 @@ test('builds out of stock notification with inline buttons', () => {
 });
 
 test('serializes Telegram send body with reply markup', () => {
-    process.env.APP_URL = 'https://app.pounce.test';
+    process.env.NEXT_PUBLIC_BETTER_AUTH_URL = 'https://app.pounce.test';
 
     const notification = getSingleNotification(
         {},
