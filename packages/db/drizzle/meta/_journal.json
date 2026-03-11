@@ -92,6 +92,13 @@
       "when": 1773095014280,
       "tag": "0012_fixed_wiccan",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1773247002662,
+      "tag": "0013_deep_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

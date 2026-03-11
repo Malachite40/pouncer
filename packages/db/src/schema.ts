@@ -78,6 +78,15 @@ export const watches = pgTable('watches', {
     lastPrice: numeric('last_price'),
     lastStockStatus: text('last_stock_status'),
     lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+    checkQueuedAt: timestamp('check_queued_at', { withTimezone: true }),
+    checkStartedAt: timestamp('check_started_at', { withTimezone: true }),
+    checkLeaseExpiresAt: timestamp('check_lease_expires_at', {
+        withTimezone: true,
+    }),
+    lastCheckAttemptAt: timestamp('last_check_attempt_at', {
+        withTimezone: true,
+    }),
+    lastCheckErrorType: text('last_check_error_type'),
     notifyPriceDrop: boolean('notify_price_drop').notNull().default(true),
     notifyPriceIncrease: boolean('notify_price_increase').notNull().default(true),
     notifyStock: boolean('notify_stock').notNull().default(true),

@@ -14,3 +14,7 @@ export interface ScraperCheckResult {
     raw_content: string | null;
     error: string | null;
 }
+
+export interface ScraperCheckOutcome extends ScraperCheckResult {
+    errorType: 'scraper_overloaded' | 'transient' | 'terminal' | null;
+}

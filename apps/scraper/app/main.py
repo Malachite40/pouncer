@@ -114,6 +114,7 @@ async def health():
         "status": "ok",
         "queue_depth": queue.qsize() if queue is not None else 0,
         "queue_capacity": settings.scrape_queue_size,
+        "enqueue_wait_ms": settings.scrape_enqueue_wait_ms,
         "workers": settings.scrape_workers,
     }
 
@@ -128,15 +129,18 @@ async def check(request: CheckRequest):
     )
 
     queue: asyncio.Queue[ScrapeJob] = app.state.scrape_queue
-    if queue.full():
-        logger.warning("Rejecting scrape request because queue is full: url=%r", request.url)
-        raise HTTPException(status_code=503, detail="Scraper is at capacity")
-
     job = ScrapeJob(request)
     try:
-        queue.put_nowait(job)
-    except asyncio.QueueFull as exc:
-        logger.warning("Scrape queue filled before enqueue completed: url=%r", request.url)
+        await asyncio.wait_for(
+            queue.put(job),
+            timeout=settings.scrape_enqueue_wait_ms / 1000,
+        )
+    except TimeoutError as exc:
+        logger.warning(
+            "Rejecting scrape request because queue did not free in time: url=%r queue_depth=%d",
+            request.url,
+            queue.qsize(),
+        )
         raise HTTPException(status_code=503, detail="Scraper is at capacity") from exc
 
     result = await job.future

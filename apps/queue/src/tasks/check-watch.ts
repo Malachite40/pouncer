@@ -1,13 +1,18 @@
 import { checkResults, sentNotifications, watches } from '@pounce/db/schema';
+import {
+    WATCH_CHECK_ERROR_TYPES,
+    completeWatchCheck,
+    failWatchCheckTerminal,
+    failWatchCheckWithBackoff,
+    markWatchCheckStarted,
+} from '@pounce/trpc/queue';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 
+import { watchLeaseMs, watchRetryBackoffMs } from '../config';
 import { db } from '../db';
 import { sendTelegramNotification } from '../lib/notifications';
 import { checkWatchWithScraper } from '../lib/scraper';
-import {
-    computeVolatility,
-    getAdjustedIntervalTier,
-} from '../lib/volatility';
+import { computeVolatility, getAdjustedIntervalTier } from '../lib/volatility';
 import { buildWatchNotifications } from '../lib/watch-notifications';
 
 interface CheckWatchPayload {
@@ -43,97 +48,156 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
         `[queue] Checking watch ${watch.id}: ${watch.name} (${watch.url})`,
     );
 
-    const result = await checkWatchWithScraper({
-        url: watch.url,
-        cssSelector: watch.cssSelector,
-        elementFingerprint: watch.elementFingerprint,
-    });
-
-    const price = result.price ?? null;
-    const stockStatus = nullIfUndefined(result.stock_status);
-    const rawContent = nullIfUndefined(result.raw_content);
-    const error = nullIfUndefined(result.error);
-
-    await db.insert(checkResults).values({
+    const attemptStartedAt = new Date();
+    const claimed = await markWatchCheckStarted(db, {
         watchId: watch.id,
-        price: price?.toString() ?? null,
-        stockStatus,
-        rawContent,
-        error,
+        userId: payload.userId,
+        now: attemptStartedAt,
+        leaseMs: watchLeaseMs,
     });
 
-    const notifications = buildWatchNotifications({
-        watch,
-        price,
-        stockStatus,
-    });
-
-    let notificationsSent = 0;
-    const now = new Date();
-
-    if (notifications.length > 0) {
-        const cooldown = watch.notifyCooldownSeconds;
-        const lastNotified = watch.lastNotifiedAt;
-        const cooldownElapsed =
-            !cooldown ||
-            !lastNotified ||
-            now.getTime() - lastNotified.getTime() >= cooldown * 1000;
-
-        if (cooldownElapsed || payload.manual) {
-            for (const notification of notifications) {
-                await sendTelegramNotification(payload.userId, notification.message);
-                await db.insert(sentNotifications).values({
-                    userId: payload.userId,
-                    watchId: watch.id,
-                    message: notification.message,
-                    type: notification.type,
-                });
-            }
-            notificationsSent = notifications.length;
-        }
+    if (!claimed) {
+        console.log(
+            `[queue] Watch ${watch.id} no longer has an active claim, skipping`,
+        );
+        return { skipped: true };
     }
 
-    const autoIntervalUpdate: Record<string, unknown> = {};
+    try {
+        const result = await checkWatchWithScraper({
+            url: watch.url,
+            cssSelector: watch.cssSelector,
+            elementFingerprint: watch.elementFingerprint,
+        });
 
-    if (watch.autoInterval && watch.baseCheckIntervalSeconds) {
-        const recentChecks = await db
-            .select({ price: checkResults.price })
-            .from(checkResults)
-            .where(eq(checkResults.watchId, watch.id))
-            .orderBy(desc(checkResults.checkedAt))
-            .limit(20);
+        const price = result.price ?? null;
+        const stockStatus = nullIfUndefined(result.stock_status);
+        const rawContent = nullIfUndefined(result.raw_content);
+        const error = nullIfUndefined(result.error);
 
-        const prices = recentChecks
-            .map((r) => (r.price ? Number(r.price) : null))
-            .filter((p): p is number => p !== null && !Number.isNaN(p));
+        await db.insert(checkResults).values({
+            watchId: watch.id,
+            price: price?.toString() ?? null,
+            stockStatus,
+            rawContent,
+            error,
+        });
 
-        if (prices.length >= 5) {
-            const cv = computeVolatility(prices);
-            const adjustedInterval = getAdjustedIntervalTier(
-                watch.baseCheckIntervalSeconds,
-                cv,
-            );
+        if (result.errorType === WATCH_CHECK_ERROR_TYPES.SCRAPER_OVERLOADED) {
+            await failWatchCheckWithBackoff(db, {
+                watchId: watch.id,
+                userId: payload.userId,
+                now: new Date(),
+                backoffMs: watchRetryBackoffMs,
+                errorType: WATCH_CHECK_ERROR_TYPES.SCRAPER_OVERLOADED,
+            });
+            return { success: false, retrying: true };
+        }
 
-            if (adjustedInterval !== watch.checkIntervalSeconds) {
-                autoIntervalUpdate.checkIntervalSeconds = adjustedInterval;
-                console.log(
-                    `[queue] Auto-interval for ${watch.id}: CV=${cv.toFixed(4)}, ${watch.checkIntervalSeconds}s -> ${adjustedInterval}s`,
+        if (result.errorType === WATCH_CHECK_ERROR_TYPES.TRANSIENT) {
+            await failWatchCheckWithBackoff(db, {
+                watchId: watch.id,
+                userId: payload.userId,
+                now: new Date(),
+                backoffMs: watchRetryBackoffMs,
+                errorType: WATCH_CHECK_ERROR_TYPES.TRANSIENT,
+            });
+            return { success: false, retrying: true };
+        }
+
+        if (result.errorType === WATCH_CHECK_ERROR_TYPES.TERMINAL) {
+            await failWatchCheckTerminal(db, {
+                watchId: watch.id,
+                userId: payload.userId,
+                now: new Date(),
+                errorType: WATCH_CHECK_ERROR_TYPES.TERMINAL,
+            });
+            return { success: false, retrying: false };
+        }
+
+        const notifications = buildWatchNotifications({
+            watch,
+            price,
+            stockStatus,
+        });
+
+        let notificationsSent = 0;
+        const now = new Date();
+
+        if (notifications.length > 0) {
+            const cooldown = watch.notifyCooldownSeconds;
+            const lastNotified = watch.lastNotifiedAt;
+            const cooldownElapsed =
+                !cooldown ||
+                !lastNotified ||
+                now.getTime() - lastNotified.getTime() >= cooldown * 1000;
+
+            if (cooldownElapsed || payload.manual) {
+                for (const notification of notifications) {
+                    await sendTelegramNotification(
+                        payload.userId,
+                        notification.message,
+                    );
+                    await db.insert(sentNotifications).values({
+                        userId: payload.userId,
+                        watchId: watch.id,
+                        message: notification.message,
+                        type: notification.type,
+                    });
+                }
+                notificationsSent = notifications.length;
+            }
+        }
+
+        let nextCheckIntervalSeconds: number | undefined;
+
+        if (watch.autoInterval && watch.baseCheckIntervalSeconds) {
+            const recentChecks = await db
+                .select({ price: checkResults.price })
+                .from(checkResults)
+                .where(eq(checkResults.watchId, watch.id))
+                .orderBy(desc(checkResults.checkedAt))
+                .limit(20);
+
+            const prices = recentChecks
+                .map((r) => (r.price ? Number(r.price) : null))
+                .filter((p): p is number => p !== null && !Number.isNaN(p));
+
+            if (prices.length >= 5) {
+                const cv = computeVolatility(prices);
+                const adjustedInterval = getAdjustedIntervalTier(
+                    watch.baseCheckIntervalSeconds,
+                    cv,
                 );
+
+                if (adjustedInterval !== watch.checkIntervalSeconds) {
+                    nextCheckIntervalSeconds = adjustedInterval;
+                    console.log(
+                        `[queue] Auto-interval for ${watch.id}: CV=${cv.toFixed(4)}, ${watch.checkIntervalSeconds}s -> ${adjustedInterval}s`,
+                    );
+                }
             }
         }
-    }
 
-    await db
-        .update(watches)
-        .set({
+        await completeWatchCheck(db, {
+            watchId: watch.id,
+            userId: payload.userId,
+            now,
             lastPrice: price?.toString() ?? watch.lastPrice ?? null,
             lastStockStatus: stockStatus ?? watch.lastStockStatus ?? null,
-            lastCheckedAt: now,
-            ...(notificationsSent > 0 && { lastNotifiedAt: now }),
-            ...autoIntervalUpdate,
-            updatedAt: now,
-        })
-        .where(eq(watches.id, watch.id));
+            notificationsSent,
+            checkIntervalSeconds: nextCheckIntervalSeconds,
+        });
 
-    return { success: true, notifications: notificationsSent };
+        return { success: true, notifications: notificationsSent };
+    } catch (error) {
+        await failWatchCheckWithBackoff(db, {
+            watchId: watch.id,
+            userId: payload.userId,
+            now: new Date(),
+            backoffMs: watchRetryBackoffMs,
+            errorType: WATCH_CHECK_ERROR_TYPES.TRANSIENT,
+        });
+        throw error;
+    }
 }

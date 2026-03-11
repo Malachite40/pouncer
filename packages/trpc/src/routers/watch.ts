@@ -1,15 +1,80 @@
 import { checkResults, watches } from '@pounce/db/schema';
-import { and, count, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
+import {
+    and,
+    count,
+    desc,
+    eq,
+    gte,
+    inArray,
+    isNull,
+    lte,
+    sql,
+} from 'drizzle-orm';
 import { z } from 'zod';
 import { enqueueWatchCheck } from '../queue/enqueue';
+import { claimWatchCheck, releaseWatchCheckClaim } from '../queue/watch-checks';
 import { authenticatedProcedure, createTRPCRouter } from '../trpc';
 
 const BOARD_HISTORY_LIMIT = 24;
+const DEFAULT_WATCH_CHECK_LEASE_MS = 120_000;
+const WATCH_CHECK_LEASE_MS = Number.parseInt(
+    process.env.WATCH_CHECK_LEASE_MS ?? `${DEFAULT_WATCH_CHECK_LEASE_MS}`,
+    10,
+);
+type DbClient = typeof import('@pounce/db').db;
 
 function mergeCheckType(a: string, b: string): 'price' | 'stock' | 'both' {
     if (a === 'both' || b === 'both') return 'both';
     if (a === b) return a as 'price' | 'stock';
     return 'both';
+}
+
+async function scheduleWatchCheckIfClaimed({
+    db,
+    watchId,
+    userId,
+    manual = false,
+    allowInactive = false,
+}: {
+    db: DbClient;
+    watchId: string;
+    userId: string;
+    manual?: boolean;
+    allowInactive?: boolean;
+}) {
+    const now = new Date();
+    const claimed = await claimWatchCheck(db, {
+        watchId,
+        userId,
+        now,
+        leaseMs: Number.isNaN(WATCH_CHECK_LEASE_MS)
+            ? DEFAULT_WATCH_CHECK_LEASE_MS
+            : WATCH_CHECK_LEASE_MS,
+        allowInactive,
+    });
+
+    if (!claimed) {
+        return { queued: false, skipped: true };
+    }
+
+    try {
+        await enqueueWatchCheck(
+            {
+                watchId,
+                userId,
+                ...(manual && { manual: true }),
+            },
+            {
+                replaceExisting: true,
+                removeOnComplete: true,
+                removeOnFail: true,
+            },
+        );
+        return { queued: true, skipped: false };
+    } catch (error) {
+        await releaseWatchCheckClaim(db, { watchId, userId, now });
+        throw error;
+    }
 }
 
 export const watchRouter = createTRPCRouter({
@@ -51,12 +116,39 @@ export const watchRouter = createTRPCRouter({
                 notifyPriceIncrease: z.boolean().default(true),
                 notifyStock: z.boolean().default(true),
                 priceDropThreshold: z.number().positive().nullable().optional(),
-                priceDropPercentThreshold: z.number().positive().max(100).nullable().optional(),
-                priceDropTargetPrice: z.number().positive().nullable().optional(),
-                priceIncreaseThreshold: z.number().positive().nullable().optional(),
-                priceIncreasePercentThreshold: z.number().positive().max(100).nullable().optional(),
-                priceIncreaseTargetPrice: z.number().positive().nullable().optional(),
-                notifyCooldownSeconds: z.number().int().positive().nullable().optional(),
+                priceDropPercentThreshold: z
+                    .number()
+                    .positive()
+                    .max(100)
+                    .nullable()
+                    .optional(),
+                priceDropTargetPrice: z
+                    .number()
+                    .positive()
+                    .nullable()
+                    .optional(),
+                priceIncreaseThreshold: z
+                    .number()
+                    .positive()
+                    .nullable()
+                    .optional(),
+                priceIncreasePercentThreshold: z
+                    .number()
+                    .positive()
+                    .max(100)
+                    .nullable()
+                    .optional(),
+                priceIncreaseTargetPrice: z
+                    .number()
+                    .positive()
+                    .nullable()
+                    .optional(),
+                notifyCooldownSeconds: z
+                    .number()
+                    .int()
+                    .positive()
+                    .nullable()
+                    .optional(),
                 autoInterval: z.boolean().default(false),
                 skipMerge: z.boolean().default(false),
             }),
@@ -87,38 +179,46 @@ export const watchRouter = createTRPCRouter({
                             cssSelector:
                                 input.cssSelector ?? existing.cssSelector,
                             elementFingerprint:
-                                input.elementFingerprint ?? existing.elementFingerprint,
-                            imageUrl:
-                                input.imageUrl ?? existing.imageUrl,
+                                input.elementFingerprint ??
+                                existing.elementFingerprint,
+                            imageUrl: input.imageUrl ?? existing.imageUrl,
                             checkIntervalSeconds: input.checkIntervalSeconds,
                             notifyPriceDrop: input.notifyPriceDrop,
                             notifyPriceIncrease: input.notifyPriceIncrease,
                             notifyStock: input.notifyStock,
-                            priceDropThreshold: input.priceDropThreshold?.toString() ?? null,
-                            priceDropPercentThreshold: input.priceDropPercentThreshold?.toString() ?? null,
-                            priceDropTargetPrice: input.priceDropTargetPrice?.toString() ?? null,
-                            priceIncreaseThreshold: input.priceIncreaseThreshold?.toString() ?? null,
-                            priceIncreasePercentThreshold: input.priceIncreasePercentThreshold?.toString() ?? null,
-                            priceIncreaseTargetPrice: input.priceIncreaseTargetPrice?.toString() ?? null,
-                            notifyCooldownSeconds: input.notifyCooldownSeconds ?? null,
+                            priceDropThreshold:
+                                input.priceDropThreshold?.toString() ?? null,
+                            priceDropPercentThreshold:
+                                input.priceDropPercentThreshold?.toString() ??
+                                null,
+                            priceDropTargetPrice:
+                                input.priceDropTargetPrice?.toString() ?? null,
+                            priceIncreaseThreshold:
+                                input.priceIncreaseThreshold?.toString() ??
+                                null,
+                            priceIncreasePercentThreshold:
+                                input.priceIncreasePercentThreshold?.toString() ??
+                                null,
+                            priceIncreaseTargetPrice:
+                                input.priceIncreaseTargetPrice?.toString() ??
+                                null,
+                            notifyCooldownSeconds:
+                                input.notifyCooldownSeconds ?? null,
                             autoInterval: input.autoInterval,
-                            ...(input.autoInterval && { baseCheckIntervalSeconds: input.checkIntervalSeconds }),
+                            ...(input.autoInterval && {
+                                baseCheckIntervalSeconds:
+                                    input.checkIntervalSeconds,
+                            }),
                             isActive: true,
                             updatedAt: new Date(),
                         })
                         .where(eq(watches.id, existing.id))
                         .returning();
-                    await enqueueWatchCheck(
-                        {
-                            watchId: updated.id,
-                            userId: ctx.userId,
-                        },
-                        {
-                            replaceExisting: true,
-                            removeOnComplete: true,
-                            removeOnFail: true,
-                        },
-                    );
+                    await scheduleWatchCheckIfClaimed({
+                        db: ctx.db,
+                        watchId: updated.id,
+                        userId: ctx.userId,
+                    });
                     return { ...updated, merged: true };
                 }
             }
@@ -136,29 +236,31 @@ export const watchRouter = createTRPCRouter({
                     notifyPriceDrop: input.notifyPriceDrop,
                     notifyPriceIncrease: input.notifyPriceIncrease,
                     notifyStock: input.notifyStock,
-                    priceDropThreshold: input.priceDropThreshold?.toString() ?? null,
-                    priceDropPercentThreshold: input.priceDropPercentThreshold?.toString() ?? null,
-                    priceDropTargetPrice: input.priceDropTargetPrice?.toString() ?? null,
-                    priceIncreaseThreshold: input.priceIncreaseThreshold?.toString() ?? null,
-                    priceIncreasePercentThreshold: input.priceIncreasePercentThreshold?.toString() ?? null,
-                    priceIncreaseTargetPrice: input.priceIncreaseTargetPrice?.toString() ?? null,
+                    priceDropThreshold:
+                        input.priceDropThreshold?.toString() ?? null,
+                    priceDropPercentThreshold:
+                        input.priceDropPercentThreshold?.toString() ?? null,
+                    priceDropTargetPrice:
+                        input.priceDropTargetPrice?.toString() ?? null,
+                    priceIncreaseThreshold:
+                        input.priceIncreaseThreshold?.toString() ?? null,
+                    priceIncreasePercentThreshold:
+                        input.priceIncreasePercentThreshold?.toString() ?? null,
+                    priceIncreaseTargetPrice:
+                        input.priceIncreaseTargetPrice?.toString() ?? null,
                     notifyCooldownSeconds: input.notifyCooldownSeconds ?? null,
                     autoInterval: input.autoInterval,
-                    ...(input.autoInterval && { baseCheckIntervalSeconds: input.checkIntervalSeconds }),
+                    ...(input.autoInterval && {
+                        baseCheckIntervalSeconds: input.checkIntervalSeconds,
+                    }),
                     userId: ctx.userId,
                 })
                 .returning();
-            await enqueueWatchCheck(
-                {
-                    watchId: watch.id,
-                    userId: ctx.userId,
-                },
-                {
-                    replaceExisting: true,
-                    removeOnComplete: true,
-                    removeOnFail: true,
-                },
-            );
+            await scheduleWatchCheckIfClaimed({
+                db: ctx.db,
+                watchId: watch.id,
+                userId: ctx.userId,
+            });
             return { ...watch, merged: false };
         }),
 
@@ -166,7 +268,9 @@ export const watchRouter = createTRPCRouter({
         return ctx.db
             .select()
             .from(watches)
-            .where(and(eq(watches.userId, ctx.userId), isNull(watches.deletedAt)))
+            .where(
+                and(eq(watches.userId, ctx.userId), isNull(watches.deletedAt)),
+            )
             .orderBy(desc(watches.createdAt));
     }),
 
@@ -174,7 +278,9 @@ export const watchRouter = createTRPCRouter({
         const watchList = await ctx.db
             .select()
             .from(watches)
-            .where(and(eq(watches.userId, ctx.userId), isNull(watches.deletedAt)))
+            .where(
+                and(eq(watches.userId, ctx.userId), isNull(watches.deletedAt)),
+            )
             .orderBy(desc(watches.createdAt));
 
         if (!watchList.length) {
@@ -347,7 +453,8 @@ export const watchRouter = createTRPCRouter({
                         isNull(watches.deletedAt),
                     ),
                 );
-            if (!watch) return { items: [], page, totalItems: 0, totalPages: 0 };
+            if (!watch)
+                return { items: [], page, totalItems: 0, totalPages: 0 };
 
             const offset = (page - 1) * pageSize;
 
@@ -394,12 +501,39 @@ export const watchRouter = createTRPCRouter({
                 notifyPriceIncrease: z.boolean().optional(),
                 notifyStock: z.boolean().optional(),
                 priceDropThreshold: z.number().positive().nullable().optional(),
-                priceDropPercentThreshold: z.number().positive().max(100).nullable().optional(),
-                priceDropTargetPrice: z.number().positive().nullable().optional(),
-                priceIncreaseThreshold: z.number().positive().nullable().optional(),
-                priceIncreasePercentThreshold: z.number().positive().max(100).nullable().optional(),
-                priceIncreaseTargetPrice: z.number().positive().nullable().optional(),
-                notifyCooldownSeconds: z.number().int().positive().nullable().optional(),
+                priceDropPercentThreshold: z
+                    .number()
+                    .positive()
+                    .max(100)
+                    .nullable()
+                    .optional(),
+                priceDropTargetPrice: z
+                    .number()
+                    .positive()
+                    .nullable()
+                    .optional(),
+                priceIncreaseThreshold: z
+                    .number()
+                    .positive()
+                    .nullable()
+                    .optional(),
+                priceIncreasePercentThreshold: z
+                    .number()
+                    .positive()
+                    .max(100)
+                    .nullable()
+                    .optional(),
+                priceIncreaseTargetPrice: z
+                    .number()
+                    .positive()
+                    .nullable()
+                    .optional(),
+                notifyCooldownSeconds: z
+                    .number()
+                    .int()
+                    .positive()
+                    .nullable()
+                    .optional(),
                 autoInterval: z.boolean().optional(),
             }),
         )
@@ -421,19 +555,24 @@ export const watchRouter = createTRPCRouter({
                     priceDropThreshold: priceDropThreshold?.toString() ?? null,
                 }),
                 ...(priceDropPercentThreshold !== undefined && {
-                    priceDropPercentThreshold: priceDropPercentThreshold?.toString() ?? null,
+                    priceDropPercentThreshold:
+                        priceDropPercentThreshold?.toString() ?? null,
                 }),
                 ...(priceDropTargetPrice !== undefined && {
-                    priceDropTargetPrice: priceDropTargetPrice?.toString() ?? null,
+                    priceDropTargetPrice:
+                        priceDropTargetPrice?.toString() ?? null,
                 }),
                 ...(priceIncreaseThreshold !== undefined && {
-                    priceIncreaseThreshold: priceIncreaseThreshold?.toString() ?? null,
+                    priceIncreaseThreshold:
+                        priceIncreaseThreshold?.toString() ?? null,
                 }),
                 ...(priceIncreasePercentThreshold !== undefined && {
-                    priceIncreasePercentThreshold: priceIncreasePercentThreshold?.toString() ?? null,
+                    priceIncreasePercentThreshold:
+                        priceIncreasePercentThreshold?.toString() ?? null,
                 }),
                 ...(priceIncreaseTargetPrice !== undefined && {
-                    priceIncreaseTargetPrice: priceIncreaseTargetPrice?.toString() ?? null,
+                    priceIncreaseTargetPrice:
+                        priceIncreaseTargetPrice?.toString() ?? null,
                 }),
                 ...(notifyCooldownSeconds !== undefined && {
                     notifyCooldownSeconds: notifyCooldownSeconds ?? null,
@@ -445,23 +584,43 @@ export const watchRouter = createTRPCRouter({
                 if (autoInterval) {
                     // Enabling: save current interval as base
                     const [current] = await ctx.db
-                        .select({ checkIntervalSeconds: watches.checkIntervalSeconds })
+                        .select({
+                            checkIntervalSeconds: watches.checkIntervalSeconds,
+                        })
                         .from(watches)
-                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId), isNull(watches.deletedAt)));
+                        .where(
+                            and(
+                                eq(watches.id, id),
+                                eq(watches.userId, ctx.userId),
+                                isNull(watches.deletedAt),
+                            ),
+                        );
                     autoIntervalFields = {
                         autoInterval: true,
-                        baseCheckIntervalSeconds: data.checkIntervalSeconds ?? current?.checkIntervalSeconds,
+                        baseCheckIntervalSeconds:
+                            data.checkIntervalSeconds ??
+                            current?.checkIntervalSeconds,
                     };
                 } else {
                     // Disabling: restore base interval
                     const [current] = await ctx.db
-                        .select({ baseCheckIntervalSeconds: watches.baseCheckIntervalSeconds })
+                        .select({
+                            baseCheckIntervalSeconds:
+                                watches.baseCheckIntervalSeconds,
+                        })
                         .from(watches)
-                        .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId), isNull(watches.deletedAt)));
+                        .where(
+                            and(
+                                eq(watches.id, id),
+                                eq(watches.userId, ctx.userId),
+                                isNull(watches.deletedAt),
+                            ),
+                        );
                     autoIntervalFields = {
                         autoInterval: false,
                         ...(current?.baseCheckIntervalSeconds && {
-                            checkIntervalSeconds: current.baseCheckIntervalSeconds,
+                            checkIntervalSeconds:
+                                current.baseCheckIntervalSeconds,
                         }),
                         baseCheckIntervalSeconds: null,
                     };
@@ -476,7 +635,13 @@ export const watchRouter = createTRPCRouter({
                     ...autoIntervalFields,
                     updatedAt: new Date(),
                 })
-                .where(and(eq(watches.id, id), eq(watches.userId, ctx.userId), isNull(watches.deletedAt)))
+                .where(
+                    and(
+                        eq(watches.id, id),
+                        eq(watches.userId, ctx.userId),
+                        isNull(watches.deletedAt),
+                    ),
+                )
                 .returning();
 
             if (
@@ -484,17 +649,11 @@ export const watchRouter = createTRPCRouter({
                 (Object.hasOwn(data, 'checkIntervalSeconds') ||
                     data.isActive === true)
             ) {
-                await enqueueWatchCheck(
-                    {
-                        watchId: updated.id,
-                        userId: ctx.userId,
-                    },
-                    {
-                        replaceExisting: true,
-                        removeOnComplete: true,
-                        removeOnFail: true,
-                    },
-                );
+                await scheduleWatchCheckIfClaimed({
+                    db: ctx.db,
+                    watchId: updated.id,
+                    userId: ctx.userId,
+                });
             }
 
             return updated;
@@ -532,18 +691,13 @@ export const watchRouter = createTRPCRouter({
             if (!watch) {
                 throw new Error('Watch not found');
             }
-            await enqueueWatchCheck(
-                {
-                    watchId: input.id,
-                    userId: ctx.userId,
-                    manual: true,
-                },
-                {
-                    replaceExisting: true,
-                    removeOnComplete: true,
-                    removeOnFail: true,
-                },
-            );
+            await scheduleWatchCheckIfClaimed({
+                db: ctx.db,
+                watchId: input.id,
+                userId: ctx.userId,
+                manual: true,
+                allowInactive: true,
+            });
             return { queued: true };
         }),
 });

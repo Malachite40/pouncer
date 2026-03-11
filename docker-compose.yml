@@ -37,6 +37,10 @@ services:
     shm_size: '2gb'
     ports:
       - "8001:8001"
+    environment:
+      SCRAPE_WORKERS: "${SCRAPE_WORKERS:-2}"
+      SCRAPE_QUEUE_SIZE: "${SCRAPE_QUEUE_SIZE:-16}"
+      SCRAPE_ENQUEUE_WAIT_MS: "${SCRAPE_ENQUEUE_WAIT_MS:-3000}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -85,6 +89,8 @@ services:
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER:-pounce}:${POSTGRES_PASSWORD:?err}@db:5432/${POSTGRES_DB:-pounce}"
       REDIS_URL: "redis://redis:6379"
+      WATCH_CHECK_LEASE_MS: "${WATCH_CHECK_LEASE_MS:-120000}"
+      WATCH_SCHEDULER_BATCH_SIZE: "${WATCH_SCHEDULER_BATCH_SIZE:-25}"
       NODE_ENV: production
     depends_on:
       db:
@@ -101,8 +107,11 @@ services:
       DATABASE_URL: "postgresql://${POSTGRES_USER:-pounce}:${POSTGRES_PASSWORD:?err}@db:5432/${POSTGRES_DB:-pounce}"
       REDIS_URL: "redis://redis:6379"
       SCRAPER_URL: "http://scraper:8001"
+      SCRAPER_CONCURRENCY_LIMIT: "${SCRAPER_CONCURRENCY_LIMIT:-2}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+      WATCH_CHECK_LEASE_MS: "${WATCH_CHECK_LEASE_MS:-120000}"
+      WATCH_CHECK_RETRY_BACKOFF_MS: "${WATCH_CHECK_RETRY_BACKOFF_MS:-60000}"
       NODE_ENV: production
     depends_on:
       db:

@@ -8,3 +8,16 @@ export {
     enqueueWatchCheck,
     getWatchCheckJobId,
 } from './queue/enqueue';
+export {
+    WATCH_CHECK_ERROR_TYPES,
+    claimDueWatchesForScheduling,
+    claimWatchCheck,
+    completeWatchCheck,
+    failWatchCheckTerminal,
+    failWatchCheckWithBackoff,
+    markWatchCheckStarted,
+    recoverExpiredWatchClaims,
+    releaseClaimsForWatches,
+    releaseWatchCheckClaim,
+} from './queue/watch-checks';
+export type { ClaimedWatch, WatchCheckErrorType } from './queue/watch-checks';
