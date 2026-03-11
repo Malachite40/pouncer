@@ -1,5 +1,12 @@
 import type { watches } from '@pounce/db/schema';
 
+import {
+    type TelegramNotificationPayload,
+    buildPriceDropNotification,
+    buildPriceIncreaseNotification,
+    buildStockNotification,
+} from './telegram';
+
 type WatchRecord = typeof watches.$inferSelect;
 
 interface BuildNotificationsInput {
@@ -79,7 +86,12 @@ export function buildWatchNotifications({
     price,
     stockStatus,
 }: BuildNotificationsInput) {
-    const notifications: { message: string; type: string }[] = [];
+    const notifications: TelegramNotificationPayload[] = [];
+    const watchContext = {
+        id: watch.id,
+        name: watch.name,
+        url: watch.url,
+    };
 
     if (price !== null && watch.lastPrice !== null) {
         const previousPrice = Number.parseFloat(watch.lastPrice);
@@ -87,39 +99,37 @@ export function buildWatchNotifications({
         if (price !== previousPrice) {
             if (price < previousPrice && watch.notifyPriceDrop) {
                 if (shouldNotifyForDrop(watch, previousPrice, price)) {
-                    const drop = previousPrice - price;
-                    const pct =
-                        previousPrice !== 0
-                            ? Math.round((drop / previousPrice) * 100)
-                            : 0;
-
-                    let message = `🟢 <b>Price Drop!</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>\n$${previousPrice.toFixed(2)} → <b>$${price.toFixed(2)}</b> (-$${drop.toFixed(2)} · ${pct}% off)`;
-
                     const targetPrice = watch.priceDropTargetPrice
                         ? Number.parseFloat(watch.priceDropTargetPrice)
                         : null;
-                    if (targetPrice !== null && price <= targetPrice) {
-                        message += `\n✅ Below target price $${targetPrice.toFixed(2)}`;
-                    }
-                    notifications.push({ message, type: 'price_drop' });
+                    notifications.push(
+                        buildPriceDropNotification({
+                            watch: watchContext,
+                            previousPrice,
+                            currentPrice: price,
+                            targetPrice:
+                                targetPrice !== null && price <= targetPrice
+                                    ? targetPrice
+                                    : null,
+                        }),
+                    );
                 }
             } else if (watch.notifyPriceIncrease) {
                 if (shouldNotifyForIncrease(watch, previousPrice, price)) {
-                    const increase = price - previousPrice;
-                    const pct =
-                        previousPrice !== 0
-                            ? Math.round((increase / previousPrice) * 100)
-                            : 0;
-
-                    let message = `🔴 <b>Price Increase</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>\n$${previousPrice.toFixed(2)} → <b>$${price.toFixed(2)}</b> (+$${increase.toFixed(2)} · ${pct}% up)`;
-
                     const targetPrice = watch.priceIncreaseTargetPrice
                         ? Number.parseFloat(watch.priceIncreaseTargetPrice)
                         : null;
-                    if (targetPrice !== null && price >= targetPrice) {
-                        message += `\n⚠️ Above target price $${targetPrice.toFixed(2)}`;
-                    }
-                    notifications.push({ message, type: 'price_increase' });
+                    notifications.push(
+                        buildPriceIncreaseNotification({
+                            watch: watchContext,
+                            previousPrice,
+                            currentPrice: price,
+                            targetPrice:
+                                targetPrice !== null && price >= targetPrice
+                                    ? targetPrice
+                                    : null,
+                        }),
+                    );
                 }
             }
         }
@@ -132,9 +142,10 @@ export function buildWatchNotifications({
         stockStatus !== watch.lastStockStatus
     ) {
         notifications.push(
-            stockStatus === 'in_stock'
-                ? { message: `🟢 <b>Back in Stock!</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`, type: 'back_in_stock' }
-                : { message: `⚪ <b>Out of Stock</b> · <a href="${watch.url}">View Product</a>\n\n<b>${watch.name}</b>`, type: 'out_of_stock' },
+            buildStockNotification({
+                watch: watchContext,
+                stockStatus: stockStatus as 'in_stock' | 'out_of_stock',
+            }),
         );
     }
 

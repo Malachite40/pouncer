@@ -136,12 +136,12 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
                 for (const notification of notifications) {
                     await sendTelegramNotification(
                         payload.userId,
-                        notification.message,
+                        notification,
                     );
                     await db.insert(sentNotifications).values({
                         userId: payload.userId,
                         watchId: watch.id,
-                        message: notification.message,
+                        message: notification.text,
                         type: notification.type,
                     });
                 }

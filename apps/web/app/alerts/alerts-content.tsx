@@ -27,7 +27,7 @@ const TYPE_LABELS: Record<string, { label: string; className: string }> = {
 };
 
 function stripHtml(html: string) {
-    return html.replace(/<[^>]*>/g, '').replace(/\n/g, ' ').trim();
+    return html.replace(/<[^>]*>/g, '').trim();
 }
 
 export default function AlertsContent() {
@@ -107,9 +107,40 @@ export default function AlertsContent() {
                                         {new Date(item.sentAt).toLocaleString()}
                                     </time>
                                 </div>
-                                <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
+                                <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">
                                     {stripHtml(item.message)}
                                 </p>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {item.watchUrl ? (
+                                        <Button
+                                            asChild
+                                            size="sm"
+                                            className="min-w-[8.5rem]"
+                                        >
+                                            <a
+                                                href={item.watchUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                View Product
+                                            </a>
+                                        </Button>
+                                    ) : null}
+                                    {item.watchId ? (
+                                        <Button
+                                            asChild
+                                            size="sm"
+                                            variant="outline"
+                                            className="min-w-[8.5rem]"
+                                        >
+                                            <Link
+                                                href={`/watches/${item.watchId}`}
+                                            >
+                                                Open in Pounce
+                                            </Link>
+                                        </Button>
+                                    ) : null}
+                                </div>
                             </div>
                         );
                     })}

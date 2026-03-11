@@ -9,7 +9,8 @@
         "paths": {
             "@pounce/queue/*": ["./src/*"],
             "@pounce/trpc/server": ["../../packages/trpc/src/server.ts"],
-            "@pounce/trpc/queue": ["../../packages/trpc/src/queue-exports.ts"]
+            "@pounce/trpc/queue": ["../../packages/trpc/src/queue-exports.ts"],
+            "@pounce/trpc/telegram": ["../../packages/trpc/src/telegram.ts"]
         }
     },
     "include": ["src/**/*.ts"],

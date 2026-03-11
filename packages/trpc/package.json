@@ -6,7 +6,8 @@
     "exports": {
         "./server": "./src/server.ts",
         "./client": "./src/client.ts",
-        "./queue": "./src/queue-exports.ts"
+        "./queue": "./src/queue-exports.ts",
+        "./telegram": "./src/telegram.ts"
     },
     "dependencies": {
         "@pounce/db": "*",

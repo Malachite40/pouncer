@@ -9,41 +9,49 @@ const NOTIFICATION_TYPES = [
         type: 'price_drop' as const,
         label: 'Price Drop',
         description: 'Price decreased without a target price line.',
-        preview: `🟢 <b>Price Drop!</b> · <a href="https://www.google.com">View Product</a>\n\n<b>Sample Product</b>\n$129.99 → <b>$89.99</b> (-$40.00 · 31% off)`,
+        preview:
+            '🟢 <b>Price Drop</b>\n<b>Sample Product</b>\n$129.99 → <b>$89.99</b> (-$40.00 · 31% off)',
     },
     {
         type: 'price_drop_target' as const,
         label: 'Price Drop (Target)',
         description: 'Price decreased below the target price.',
-        preview: `🟢 <b>Price Drop!</b> · <a href="https://www.google.com">View Product</a>\n\n<b>Sample Product</b>\n$129.99 → <b>$89.99</b> (-$40.00 · 31% off)\n✅ Below target price $99.00`,
+        preview:
+            '🟢 <b>Price Drop</b>\n<b>Sample Product</b>\n$129.99 → <b>$89.99</b> (-$40.00 · 31% off)\n✅ Below target price $99.00',
     },
     {
         type: 'price_increase' as const,
         label: 'Price Increase',
         description: 'Price increased without a target price line.',
-        preview: `🔴 <b>Price Increase</b> · <a href="https://www.google.com">View Product</a>\n\n<b>Sample Product</b>\n$89.99 → <b>$109.99</b> (+$20.00 · 22% up)`,
+        preview:
+            '🔴 <b>Price Increase</b>\n<b>Sample Product</b>\n$89.99 → <b>$109.99</b> (+$20.00 · 22% up)',
     },
     {
         type: 'price_increase_target' as const,
         label: 'Price Increase (Target)',
         description: 'Price increased above the target price.',
-        preview: `🔴 <b>Price Increase</b> · <a href="https://www.google.com">View Product</a>\n\n<b>Sample Product</b>\n$89.99 → <b>$109.99</b> (+$20.00 · 22% up)\n⚠️ Above target price $100.00`,
+        preview:
+            '🔴 <b>Price Increase</b>\n<b>Sample Product</b>\n$89.99 → <b>$109.99</b> (+$20.00 · 22% up)\n⚠️ Above target price $100.00',
     },
     {
         type: 'back_in_stock' as const,
         label: 'Back in Stock',
         description: 'Item returned to stock.',
-        preview: `🟢 <b>Back in Stock!</b> · <a href="https://www.google.com">View Product</a>\n\n<b>Sample Product</b>`,
+        preview:
+            '🟢 <b>Back in Stock</b>\n<b>Sample Product</b>\nStock signal recovered.',
     },
     {
         type: 'out_of_stock' as const,
         label: 'Out of Stock',
         description: 'Item went out of stock.',
-        preview: `⚪ <b>Out of Stock</b> · <a href="https://www.google.com">View Product</a>\n\n<b>Sample Product</b>`,
+        preview:
+            '⚪ <b>Out of Stock</b>\n<b>Sample Product</b>\nStock signal lost.',
     },
 ];
 
 type NotificationType = (typeof NOTIFICATION_TYPES)[number]['type'];
+
+const PREVIEW_ACTIONS = ['View Product', 'Open in Pounce'] as const;
 
 export default function TestPage() {
     const [sentTypes, setSentTypes] = useState<Set<NotificationType>>(
@@ -84,7 +92,8 @@ export default function TestPage() {
                 <p className="mt-4 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
                     Send each notification type to your Telegram to verify
                     formatting. Make sure you have a chat ID configured in
-                    settings first.
+                    settings first. Telegram will render inline action buttons
+                    under each message.
                 </p>
             </section>
 
@@ -109,13 +118,24 @@ export default function TestPage() {
                             </span>
                         </div>
 
-                        <pre className="mt-3 flex-1 overflow-x-auto whitespace-pre-wrap rounded-md border border-border/50 bg-background/40 p-3 font-mono text-xs leading-5 text-muted-foreground">
-                            {notif.preview
-                                .replace(/<b>/g, '')
-                                .replace(/<\/b>/g, '')
-                                .replace(/<a href="[^"]*">/g, '')
-                                .replace(/<\/a>/g, '')}
-                        </pre>
+                        <div className="mt-3 flex-1 rounded-md border border-border/50 bg-background/40 p-3">
+                            <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-5 text-muted-foreground">
+                                {notif.preview
+                                    .replace(/<b>/g, '')
+                                    .replace(/<\/b>/g, '')}
+                            </pre>
+
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                                {PREVIEW_ACTIONS.map((action) => (
+                                    <div
+                                        key={action}
+                                        className="rounded-sm border border-primary/25 bg-primary/10 px-2 py-2 text-center text-[11px] font-medium tracking-[0.08em] text-primary"
+                                    >
+                                        {action}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
 
                         <Button
                             className="mt-3"

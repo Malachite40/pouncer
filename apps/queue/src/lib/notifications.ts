@@ -1,11 +1,13 @@
 import { notificationSettings } from '@pounce/db/schema';
+import type { TelegramNotificationPayload } from '@pounce/trpc/telegram';
 import { eq } from 'drizzle-orm';
 
 import { db } from '../db';
+import { buildTelegramSendMessageBody } from './send-message-body';
 
 export async function sendTelegramNotification(
     userId: string,
-    message: string,
+    notification: TelegramNotificationPayload,
 ) {
     const [settings] = await db
         .select()
@@ -28,12 +30,9 @@ export async function sendTelegramNotification(
         await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: chatId,
-                text: message,
-                parse_mode: 'HTML',
-                disable_web_page_preview: true,
-            }),
+            body: JSON.stringify(
+                buildTelegramSendMessageBody(chatId, notification),
+            ),
         });
     } catch (error) {
         console.error('[queue] Failed to send Telegram notification:', error);

@@ -1,15 +1,22 @@
-import { eq, and, desc, count } from 'drizzle-orm';
+import {
+    notificationSettings,
+    sentNotifications,
+    watches,
+} from '@pounce/db/schema';
+import { and, count, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { notificationSettings, sentNotifications, watches } from '@pounce/db/schema';
-import { createTRPCRouter, authenticatedProcedure } from '../trpc';
+import { buildTelegramTestPayload } from '../telegram';
+import { authenticatedProcedure, createTRPCRouter } from '../trpc';
 
 export const notificationRouter = createTRPCRouter({
     history: authenticatedProcedure
         .input(
-            z.object({
-                page: z.number().int().positive().default(1),
-                pageSize: z.number().int().positive().max(100).default(50),
-            }).default({}),
+            z
+                .object({
+                    page: z.number().int().positive().default(1),
+                    pageSize: z.number().int().positive().max(100).default(50),
+                })
+                .default({}),
         )
         .query(async ({ ctx, input }) => {
             const { page, pageSize } = input;
@@ -27,7 +34,10 @@ export const notificationRouter = createTRPCRouter({
                         watchUrl: watches.url,
                     })
                     .from(sentNotifications)
-                    .leftJoin(watches, eq(sentNotifications.watchId, watches.id))
+                    .leftJoin(
+                        watches,
+                        eq(sentNotifications.watchId, watches.id),
+                    )
                     .where(eq(sentNotifications.userId, ctx.userId))
                     .orderBy(desc(sentNotifications.sentAt))
                     .limit(pageSize)
@@ -116,22 +126,14 @@ export const notificationRouter = createTRPCRouter({
                 throw new Error('Telegram bot token is not configured');
             }
 
-            const name = 'Sample Product';
-            const url = 'https://www.google.com';
-
-            const SAMPLE_NOTIFICATIONS: Record<string, string> = {
-                price_drop: `🟢 <b>Price Drop!</b> · <a href="${url}">View Product</a>\n\n<b>${name}</b>\n$129.99 → <b>$89.99</b> (-$40.00 · 31% off)`,
-                price_drop_target: `🟢 <b>Price Drop!</b> · <a href="${url}">View Product</a>\n\n<b>${name}</b>\n$129.99 → <b>$89.99</b> (-$40.00 · 31% off)\n✅ Below target price $99.00`,
-                price_increase: `🔴 <b>Price Increase</b> · <a href="${url}">View Product</a>\n\n<b>${name}</b>\n$89.99 → <b>$109.99</b> (+$20.00 · 22% up)`,
-                price_increase_target: `🔴 <b>Price Increase</b> · <a href="${url}">View Product</a>\n\n<b>${name}</b>\n$89.99 → <b>$109.99</b> (+$20.00 · 22% up)\n⚠️ Above target price $100.00`,
-                back_in_stock: `🟢 <b>Back in Stock!</b> · <a href="${url}">View Product</a>\n\n<b>${name}</b>`,
-                out_of_stock: `⚪ <b>Out of Stock</b> · <a href="${url}">View Product</a>\n\n<b>${name}</b>`,
-            };
-
-            const message = SAMPLE_NOTIFICATIONS[input.type];
-            if (!message) {
-                throw new Error(`Unknown notification type: ${input.type}`);
-            }
+            const notification = buildTelegramTestPayload({
+                type: input.type,
+                watch: {
+                    id: '00000000-0000-0000-0000-000000000001',
+                    name: 'Sample Product',
+                    url: 'https://www.google.com',
+                },
+            });
 
             const response = await fetch(
                 `https://api.telegram.org/bot${botToken}/sendMessage`,
@@ -140,9 +142,12 @@ export const notificationRouter = createTRPCRouter({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         chat_id: settings.telegramChatId,
-                        text: message,
+                        text: notification.text,
                         parse_mode: 'HTML',
                         disable_web_page_preview: true,
+                        ...(notification.replyMarkup && {
+                            reply_markup: notification.replyMarkup,
+                        }),
                     }),
                 },
             );
@@ -171,6 +176,15 @@ export const notificationRouter = createTRPCRouter({
             throw new Error('Telegram bot token is not configured');
         }
 
+        const notification = buildTelegramTestPayload({
+            type: 'back_in_stock',
+            watch: {
+                id: '00000000-0000-0000-0000-000000000001',
+                name: 'Pounce Test',
+                url: 'https://www.google.com',
+            },
+        });
+
         const response = await fetch(
             `https://api.telegram.org/bot${botToken}/sendMessage`,
             {
@@ -178,9 +192,15 @@ export const notificationRouter = createTRPCRouter({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     chat_id: settings.telegramChatId,
-                    text: '🟢 <b>Pounce Test</b>\n\nNotifications are working! You\'ll receive alerts here when your watched products change.',
+                    text: notification.text.replace(
+                        'Stock signal recovered.',
+                        "Notifications are working. You'll receive alerts here when your watched products change.",
+                    ),
                     parse_mode: 'HTML',
                     disable_web_page_preview: true,
+                    ...(notification.replyMarkup && {
+                        reply_markup: notification.replyMarkup,
+                    }),
                 }),
             },
         );
