@@ -2,7 +2,9 @@ import { auth } from '@/auth';
 import { LandingPage } from '@/components/marketing/landing-page';
 import { HydrateClient, api } from '@/trpc/server';
 import { headers } from 'next/headers';
+import { NextRunTimestamp } from './next-run-timestamp';
 import { WatchList } from './watch-list';
+import { getNextCheckAt } from './watch-timing';
 
 export default async function Home() {
     const session = await auth.api.getSession({
@@ -25,7 +27,10 @@ export default async function Home() {
         .map((watch) => ({
             id: watch.id,
             name: watch.name,
-            nextRunAt: getNextRunAt(watch.lastCheckedAt, watch.checkIntervalSeconds),
+            nextRunAt: getNextCheckAt(
+                watch.lastCheckedAt,
+                watch.checkIntervalSeconds,
+            ),
         }))
         .sort((a, b) => a.nextRunAt.getTime() - b.nextRunAt.getTime())
         .slice(0, 5);
@@ -46,8 +51,8 @@ export default async function Home() {
                                         Track price and stock.
                                     </h1>
                                     <p className="mt-1.5 max-w-lg text-xs leading-5 text-muted-foreground sm:mt-3 sm:text-sm sm:leading-6">
-                                        Clean signals, fast scans, Telegram alerts when anything
-                                        changes.
+                                        Clean signals, fast scans, Telegram
+                                        alerts when anything changes.
                                     </p>
                                 </div>
 
@@ -71,7 +76,9 @@ export default async function Home() {
 
                                 <div className="hidden flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:flex sm:gap-x-5 sm:gap-y-2 sm:pt-3 sm:text-[11px] px-2 sm:px-6 py-2">
                                     <span>{watches.length} total watches</span>
-                                    <span className="text-primary/85">Live board</span>
+                                    <span className="text-primary/85">
+                                        Live board
+                                    </span>
                                     <span>Fastest signal first</span>
                                 </div>
                             </div>
@@ -96,14 +103,19 @@ export default async function Home() {
                                         >
                                             <div className="min-w-0 flex items-start gap-3 sm:items-center">
                                                 <div className="font-[family:var(--font-display)] text-lg leading-none tracking-[-0.05em] text-primary/90">
-                                                    {String(index + 1).padStart(2, '0')}
+                                                    {String(index + 1).padStart(
+                                                        2,
+                                                        '0',
+                                                    )}
                                                 </div>
                                                 <div className="text-sm text-foreground break-words">
                                                     {watch.name}
                                                 </div>
                                             </div>
                                             <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground sm:shrink-0 sm:text-right">
-                                                {formatNextRunLabel(watch.nextRunAt)}
+                                                <NextRunTimestamp
+                                                    nextRunAt={watch.nextRunAt}
+                                                />
                                             </div>
                                         </div>
                                     ))}
@@ -145,28 +157,4 @@ function MetricCard({
             </div>
         </div>
     );
-}
-
-function getNextRunAt(
-    lastCheckedAt: Date | string | null,
-    checkIntervalSeconds: number,
-) {
-    if (!lastCheckedAt) {
-        return new Date(0);
-    }
-
-    return new Date(
-        new Date(lastCheckedAt).getTime() + checkIntervalSeconds * 1000,
-    );
-}
-
-function formatNextRunLabel(nextRunAt: Date) {
-    if (nextRunAt.getTime() <= Date.now()) {
-        return 'now';
-    }
-
-    return nextRunAt.toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-    });
 }
