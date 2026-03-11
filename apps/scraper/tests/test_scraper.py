@@ -1,6 +1,77 @@
 from app import scraper
 
 
+def test_scrape_product_reports_dynamic_fetch_error_after_empty_extraction(monkeypatch):
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_static_page",
+        lambda _url: {"html": "<html><body><div>No price here</div></body></html>"},
+    )
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_dynamic_page",
+        lambda _url, _css_selector=None: scraper._error_result("browser has been closed"),
+    )
+
+    result = scraper.scrape_product("https://example.com/product")
+
+    assert result["price"] is None
+    assert result["stock_status"] is None
+    assert (
+        result["error"]
+        == "Dynamic fetch failed after empty extraction: browser has been closed"
+    )
+    assert "[scrapling-dynamic] error=browser has been closed" in (
+        result["raw_content"] or ""
+    )
+
+
+def test_scrape_product_reports_no_product_data_when_fetches_succeed_without_matches(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_static_page",
+        lambda _url: {"html": "<html><body><div>Nothing useful</div></body></html>"},
+    )
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_dynamic_page",
+        lambda _url, _css_selector=None: {
+            "html": "<html><body><div>Still nothing useful</div></body></html>"
+        },
+    )
+
+    result = scraper.scrape_product("https://example.com/product")
+
+    assert result["price"] is None
+    assert result["stock_status"] is None
+    assert result["error"] == "No product data extracted from page"
+    assert "[source] scrapling-static" in (result["raw_content"] or "")
+    assert "[source] scrapling-dynamic" in (result["raw_content"] or "")
+
+
+def test_scrape_product_keeps_successful_extraction_error_free(monkeypatch):
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_static_page",
+        lambda _url: {
+            "html": """
+            <html><body>
+                <span class="price">$84.76</span>
+                <div class="stock">In Stock</div>
+            </body></html>
+            """
+        },
+    )
+
+    result = scraper.scrape_product("https://example.com/product")
+
+    assert result["price"] == 84.76
+    assert result["stock_status"] == "in_stock"
+    assert result["error"] is None
+
+
 def test_dynamic_fetch_uses_request_scoped_session_and_cleans_profile(monkeypatch):
     cleaned_dirs: list[str] = []
 

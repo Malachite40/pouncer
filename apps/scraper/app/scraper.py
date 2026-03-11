@@ -38,6 +38,9 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
     try:
         logger.info("--- Scraping %s (css_selector=%r, has_fingerprint=%s) ---", url, css_selector, element_fingerprint is not None)
 
+        dynamic_attempted = False
+        dynamic_error: str | None = None
+
         static_result = _fetch_static_page(url)
         if static_result.get("error"):
             logger.info("Static fetch failed: %s", static_result["error"])
@@ -64,6 +67,7 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
             or result["stock_status"] == "out_of_stock"
         )
         if should_try_dynamic:
+            dynamic_attempted = True
             logger.info("Static result incomplete or non-buyable — trying dynamic fetch")
             dynamic_result = _fetch_dynamic_page(url, css_selector)
             if dynamic_result.get("error") is None:
@@ -92,11 +96,18 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
                     dynamic_extraction.get("raw_content"),
                 )
             else:
+                dynamic_error = dynamic_result["error"]
                 logger.info("Dynamic fetch failed: %s", dynamic_result["error"])
                 result["raw_content"] = _join_raw_content(
                     result.get("raw_content"),
                     f"[scrapling-dynamic] error={dynamic_result['error']}",
                 )
+
+        if result["price"] is None and result["stock_status"] is None:
+            result["error"] = _resolve_empty_scrape_error(
+                dynamic_attempted=dynamic_attempted,
+                dynamic_error=dynamic_error,
+            )
 
         logger.info(
             "--- Final result: price=%s, stock=%s, error=%s ---",
@@ -205,6 +216,16 @@ def _decode_response_body(response) -> str:
         encoding = getattr(response, "encoding", None) or "utf-8"
         return body.decode(encoding, errors="replace")
     return str(body)
+
+
+def _resolve_empty_scrape_error(
+    *,
+    dynamic_attempted: bool,
+    dynamic_error: str | None,
+) -> str:
+    if dynamic_attempted and dynamic_error:
+        return f"Dynamic fetch failed after empty extraction: {dynamic_error}"
+    return "No product data extracted from page"
 
 
 # --- Main extraction pipeline ---

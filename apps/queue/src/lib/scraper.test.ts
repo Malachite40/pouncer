@@ -29,6 +29,12 @@ test('classifies timeout and abort errors as transient', () => {
         'transient',
     );
     assert.equal(__testables.classifyScraperError('Scrape timed out'), 'transient');
+    assert.equal(
+        __testables.classifyScraperError(
+            'Dynamic fetch failed after empty extraction: browser has been closed',
+        ),
+        'transient',
+    );
 });
 
 test('classifies health-derived overload messages as scraper overload', () => {
@@ -73,4 +79,11 @@ test('classifies timed-out 200 responses as transient', async () => {
     } finally {
         globalThis.fetch = originalFetch;
     }
+});
+
+test('classifies empty extraction responses as terminal', () => {
+    assert.equal(
+        __testables.classifyScraperError('No product data extracted from page'),
+        'terminal',
+    );
 });
