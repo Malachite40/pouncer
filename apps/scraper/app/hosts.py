@@ -5,7 +5,13 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from .parsing import ExtractionResult, _extract_price_from_text, _is_element_disabled, _parse_price_match
+from .parsing import (
+    ExtractionResult,
+    _extract_price_from_text,
+    _is_element_disabled,
+    _is_purchase_cta_text,
+    _parse_price_match,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,9 +148,13 @@ def _extract_amazon_data(soup: BeautifulSoup) -> ExtractionResult | None:
 
     if stock_status is None:
         add_to_cart = soup.select_one("#add-to-cart-button")
-        if add_to_cart and not _is_element_disabled(add_to_cart):
-            stock_status = "in_stock"
-            raw_parts.append("add-to-cart=present")
+        if add_to_cart and _is_purchase_cta_text(add_to_cart.get("value") or add_to_cart.get_text(" ", strip=True)):
+            if _is_element_disabled(add_to_cart):
+                stock_status = "out_of_stock"
+                raw_parts.append("add-to-cart=disabled")
+            else:
+                stock_status = "in_stock"
+                raw_parts.append("add-to-cart=present")
 
     if price is None and stock_status is None:
         return None
@@ -217,9 +227,13 @@ def _extract_bestbuy_data(soup: BeautifulSoup) -> ExtractionResult | None:
         raw_parts.append("button=SOLD_OUT")
     else:
         add_to_cart = soup.select_one(".fulfillment-add-to-cart-button")
-        if add_to_cart and not _is_element_disabled(add_to_cart):
-            stock_status = "in_stock"
-            raw_parts.append("add-to-cart=present")
+        if add_to_cart and _is_purchase_cta_text(add_to_cart.get_text(" ", strip=True)):
+            if _is_element_disabled(add_to_cart):
+                stock_status = "out_of_stock"
+                raw_parts.append("add-to-cart=disabled")
+            else:
+                stock_status = "in_stock"
+                raw_parts.append("add-to-cart=present")
 
     if price is None and stock_status is None:
         return None
@@ -247,9 +261,13 @@ def _extract_costco_data(soup: BeautifulSoup) -> ExtractionResult | None:
         raw_parts.append("text=out_of_stock")
     else:
         add_to_cart = soup.select_one("#add-to-cart-btn, #addToCartButton, .add-to-cart-btn")
-        if add_to_cart and not _is_element_disabled(add_to_cart):
-            stock_status = "in_stock"
-            raw_parts.append("add-to-cart=present")
+        if add_to_cart and _is_purchase_cta_text(add_to_cart.get_text(" ", strip=True)):
+            if _is_element_disabled(add_to_cart):
+                stock_status = "out_of_stock"
+                raw_parts.append("add-to-cart=disabled")
+            else:
+                stock_status = "in_stock"
+                raw_parts.append("add-to-cart=present")
 
     if price is None and stock_status is None:
         return None

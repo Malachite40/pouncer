@@ -4,6 +4,14 @@ from typing import TypedDict
 
 logger = logging.getLogger(__name__)
 
+_PURCHASE_CTA_PATTERNS = (
+    "add to cart",
+    "add to bag",
+    "add to basket",
+    "buy now",
+    "buy it now",
+)
+
 
 # --- Typed data containers ---
 
@@ -154,6 +162,14 @@ def _extract_stock_from_text(text: str) -> str | None:
             return "out_of_stock"
 
     return None
+
+
+def _is_purchase_cta_text(text: str) -> bool:
+    """Return True when text matches a purchase CTA used as an in-stock signal."""
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in _PURCHASE_CTA_PATTERNS)
 
 
 # --- Price validation ---

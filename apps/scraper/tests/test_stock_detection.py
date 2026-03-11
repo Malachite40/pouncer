@@ -51,13 +51,13 @@ class TestCssSelectorDisabled:
         soup = make_soup('<button class="buy" disabled>Add to Cart</button>')
         result = _extract_css_selector(soup, "button.buy")
         assert result is not None
-        assert result["stock_status"] is None
+        assert result["stock_status"] == "out_of_stock"
 
     def test_aria_disabled_button_nullifies_stock(self, make_soup):
         soup = make_soup('<button class="buy" aria-disabled="true">Add to Cart</button>')
         result = _extract_css_selector(soup, "button.buy")
         assert result is not None
-        assert result["stock_status"] is None
+        assert result["stock_status"] == "out_of_stock"
 
     def test_non_interactive_element_unaffected(self, make_soup):
         soup = make_soup('<div class="stock">In Stock</div>')
@@ -69,7 +69,12 @@ class TestCssSelectorDisabled:
         soup = make_soup('<div role="button" class="buy" disabled>Add to Cart</div>')
         result = _extract_css_selector(soup, 'div.buy')
         assert result is not None
-        assert result["stock_status"] is None
+        assert result["stock_status"] == "out_of_stock"
+
+    def test_disabled_non_purchase_button_stays_neutral(self, make_soup):
+        soup = make_soup('<button class="buy" disabled>Choose Size</button>')
+        result = _extract_css_selector(soup, "button.buy")
+        assert result is None
 
 
 # --- Amazon ---
@@ -94,7 +99,8 @@ class TestAmazonDisabled:
         html = '<input id="add-to-cart-button" type="submit" value="Add to Cart" disabled>'
         soup = make_soup(html)
         result = _extract_amazon_data(soup)
-        assert result is None
+        assert result is not None
+        assert result["stock_status"] == "out_of_stock"
 
 
 # --- Best Buy ---
@@ -112,7 +118,8 @@ class TestBestBuyDisabled:
         html = '<button class="fulfillment-add-to-cart-button" disabled>Add to Cart</button>'
         soup = make_soup(html)
         result = _extract_bestbuy_data(soup)
-        assert result is None
+        assert result is not None
+        assert result["stock_status"] == "out_of_stock"
 
 
 # --- Costco ---
@@ -144,7 +151,8 @@ class TestCostcoDisabled:
         html = '<button id="add-to-cart-btn" disabled>Add to Cart</button>'
         soup = make_soup(html)
         result = _extract_costco_data(soup)
-        assert result is None
+        assert result is not None
+        assert result["stock_status"] == "out_of_stock"
 
 
 # --- Generic add-to-cart selectors ---

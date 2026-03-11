@@ -9,6 +9,7 @@ from .parsing import (
     _extract_price_from_text,
     _extract_stock_from_text,
     _is_element_disabled,
+    _is_purchase_cta_text,
     _normalize_text,
     _parse_price_match,
 )
@@ -32,15 +33,20 @@ def _extract_css_selector(soup: BeautifulSoup, css_selector: str) -> ExtractionR
     stock_status = _extract_stock_from_text(text)
     if price is None and stock_status is None:
         return None
-    # A disabled interactive element shouldn't imply in_stock
+    # A disabled purchase CTA should map to out_of_stock, not imply in_stock.
     if stock_status == "in_stock":
         for el in elements:
             is_interactive = (
                 el.name in _INTERACTIVE_TAGS
                 or el.get("role", "").lower() == "button"
             )
-            if is_interactive and _is_element_disabled(el):
-                stock_status = None
+            element_text = el.get("value") if el.name == "input" else el.get_text(" ", strip=True)
+            if (
+                is_interactive
+                and _is_element_disabled(el)
+                and _is_purchase_cta_text(element_text or "")
+            ):
+                stock_status = "out_of_stock"
                 break
     return ExtractionResult(price=price, stock_status=stock_status, raw=text)
 
