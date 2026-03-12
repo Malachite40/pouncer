@@ -55,7 +55,8 @@ class TestExtractFromHtml:
 
 
 class TestScrapeProduct:
-    def test_dynamic_stock_overrides_conflicting_static_stock(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_dynamic_stock_overrides_conflicting_static_stock(self, monkeypatch):
         static_html = """
         <html><body>
         <span class="price">$54.99</span>
@@ -69,16 +70,19 @@ class TestScrapeProduct:
         </body></html>
         """
 
-        monkeypatch.setattr(
-            "app.scraper._fetch_static_page",
-            lambda url: {"html": static_html},
-        )
-        monkeypatch.setattr(
-            "app.scraper._fetch_dynamic_page",
-            lambda url, css_selector=None: {"html": dynamic_html},
-        )
+        async def fake_static_fetch(_url):
+            return {"html": static_html}
 
-        result = scrape_product("https://example.com/product")
+        async def fake_dynamic_fetch(_browser, _url, _css_selector=None):
+            return {"html": dynamic_html}
+
+        monkeypatch.setattr("app.scraper._fetch_static_page", fake_static_fetch)
+        monkeypatch.setattr("app.scraper._fetch_dynamic_page", fake_dynamic_fetch)
+
+        result = await scrape_product(
+            "https://example.com/product",
+            object(),
+        )
 
         assert result["price"] == 54.99
         assert result["stock_status"] == "in_stock"

@@ -1,11 +1,13 @@
+import asyncio
+import contextlib
 import logging
-import shutil
-import tempfile
-import time
+import re
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-from scrapling.fetchers import DynamicSession, Fetcher
+from playwright.async_api import Browser, Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from scrapling.fetchers import Fetcher
 
 from .config import settings
 from .hosts import _extract_host_specific
@@ -32,25 +34,53 @@ _STOCK_SOURCE_PRIORITIES = {
     "meta": 10,
 }
 
-_RESOURCE_EXHAUSTION_MARKERS = (
-    "resource temporarily unavailable",
-    "connection closed while reading from the driver",
-    "browsertype.launch_persistent_context",
-    "browsertype.launch:",
-    "too many open files",
-    "cannot allocate memory",
-)
+class ScrapeTimeoutError(RuntimeError):
+    pass
 
 
-def scrape_product(url: str, css_selector: str | None = None, element_fingerprint: str | None = None) -> ScrapeResult:
+class BrowserSessionError(RuntimeError):
+    pass
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    return "timeout" in str(exc).lower() or isinstance(exc, PlaywrightTimeoutError)
+
+
+def _is_browser_restartable_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "target page, context or browser has been closed",
+            "browser has been closed",
+            "page crashed",
+            "connection closed while reading from the driver",
+        )
+    )
+
+
+async def scrape_product(
+    url: str,
+    browser: Browser,
+    css_selector: str | None = None,
+    element_fingerprint: str | None = None,
+) -> ScrapeResult:
     """Scrape a product page for price and stock information."""
     try:
         logger.info("--- Scraping %s (css_selector=%r, has_fingerprint=%s) ---", url, css_selector, element_fingerprint is not None)
+        effective_css_selector = _normalize_css_selector(url, css_selector)
+        if effective_css_selector != css_selector:
+            logger.info(
+                "Normalized css selector for %s from %r to %r",
+                url,
+                css_selector,
+                effective_css_selector,
+            )
 
         dynamic_attempted = False
         dynamic_error: str | None = None
 
-        static_result = _fetch_static_page(url)
+        static_result = await _fetch_static_page(url)
         if static_result.get("error"):
             logger.info("Static fetch failed: %s", static_result["error"])
             return static_result
@@ -61,7 +91,7 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
         result = _extract_from_html(
             html=html,
             url=url,
-            css_selector=css_selector,
+            css_selector=effective_css_selector,
             element_fingerprint=element_fingerprint,
             source_label="scrapling-static",
         )
@@ -78,7 +108,7 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
         if should_try_dynamic:
             dynamic_attempted = True
             logger.info("Static result incomplete or non-buyable — trying dynamic fetch")
-            dynamic_result = _fetch_dynamic_page(url, css_selector)
+            dynamic_result = await _fetch_dynamic_page(browser, url, effective_css_selector)
             if dynamic_result.get("error") is None:
                 dyn_html = dynamic_result["html"]
                 logger.info("Dynamic fetch OK: %d chars of HTML", len(dyn_html))
@@ -86,7 +116,7 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
                 dynamic_extraction = _extract_from_html(
                     html=dyn_html,
                     url=url,
-                    css_selector=css_selector,
+                    css_selector=effective_css_selector,
                     element_fingerprint=element_fingerprint,
                     source_label="scrapling-dynamic",
                 )
@@ -124,6 +154,8 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
         )
         return result
 
+    except (BrowserSessionError, ScrapeTimeoutError):
+        raise
     except Exception as e:
         logger.exception("Unexpected error scraping %s", url)
         return _error_result(f"Scrape failed: {str(e)}")
@@ -132,108 +164,111 @@ def scrape_product(url: str, css_selector: str | None = None, element_fingerprin
 # --- Fetch helpers ---
 
 
-def _fetch_static_page(url: str) -> dict:
-    response = Fetcher.get(
-        url,
-        follow_redirects=True,
-        timeout=settings.scrape_timeout * 1000,
-        stealthy_headers=True,
-        impersonate="chrome",
-    )
-    if response.status >= 400:
-        return _error_result(f"HTTP {response.status}: {response.reason}")
-
-    return {"html": _decode_response_body(response)}
-
-_DYNAMIC_PROFILE_PREFIX = "pounce-playwright-profile-"
-
-
-def _create_dynamic_profile_dir() -> str:
-    return tempfile.mkdtemp(prefix=_DYNAMIC_PROFILE_PREFIX)
-
-
-def _cleanup_profile_dir(profile_dir: str):
+async def _fetch_static_page(url: str) -> dict:
     try:
-        shutil.rmtree(profile_dir, ignore_errors=False)
-    except FileNotFoundError:
-        return
-    except Exception:
-        logger.warning("Failed to remove Playwright profile dir %s", profile_dir, exc_info=True)
-
-
-def _is_transient_browser_close(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return (
-        "target page, context or browser has been closed" in message
-        or "browsercontext.new_page: target page, context or browser has been closed" in message
-    )
-
-
-def _is_browser_resource_exhaustion(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return any(marker in message for marker in _RESOURCE_EXHAUSTION_MARKERS)
-
-
-def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
-    wait_selector = _get_wait_selector(url, css_selector)
-    response = None
-    for attempt in range(1, settings.dynamic_fetch_retries + 1):
-        profile_dir = (
-            _create_dynamic_profile_dir()
-            if settings.dynamic_use_persistent_context
-            else None
+        response = await asyncio.to_thread(
+            Fetcher.get,
+            url,
+            follow_redirects=True,
+            timeout=settings.scrape_timeout * 1000,
+            stealthy_headers=True,
+            impersonate="chrome",
         )
-        try:
-            logger.info(
-                "Dynamic fetch attempt %d for %s using profile_dir=%s",
-                attempt,
-                url,
-                profile_dir,
-            )
-            session_kwargs = dict(
-                headless=True,
-                timeout=settings.dynamic_timeout_ms,
-                wait=settings.dynamic_wait_ms,
-                wait_selector=wait_selector,
-                wait_selector_state=settings.dynamic_wait_selector_state,
-                disable_resources=False,
-                google_search=True,
-                locale="en-US",
-                retries=1,
-                retry_delay=0,
-            )
-            if profile_dir is not None:
-                session_kwargs["user_data_dir"] = profile_dir
-
-            with DynamicSession(**session_kwargs) as session:
-                response = session.fetch(url)
-                break
-        except Exception as exc:
-            logger.exception("Dynamic fetch crashed for %s on attempt %d", url, attempt)
-            if _is_browser_resource_exhaustion(exc):
-                return _error_result(
-                    "Scraper overloaded: browser launch failed due to resource exhaustion"
-                )
-            if attempt >= settings.dynamic_fetch_retries or not _is_transient_browser_close(exc):
-                raise
-            backoff_s = settings.dynamic_retry_backoff_ms / 1000
-            logger.warning(
-                "Retrying dynamic fetch for %s after transient browser-close error in %.2fs",
-                url,
-                backoff_s,
-            )
-            time.sleep(backoff_s)
-        finally:
-            if profile_dir is not None:
-                _cleanup_profile_dir(profile_dir)
-
-    if response is None:
-        return _error_result("Dynamic fetch failed without a response")
+    except Exception as exc:
+        if _is_timeout_error(exc):
+            raise ScrapeTimeoutError(f"Static fetch timed out: {exc}") from exc
+        raise
 
     if response.status >= 400:
         return _error_result(f"HTTP {response.status}: {response.reason}")
 
     return {"html": _decode_response_body(response)}
+
+
+async def _fetch_dynamic_page(
+    browser: Browser,
+    url: str,
+    css_selector: str | None = None,
+) -> dict:
+    context = None
+    page = None
+    try:
+        context = await browser.new_context(
+            locale="en-US",
+            user_agent=settings.browser_user_agent,
+            extra_http_headers={
+                "accept-language": settings.browser_accept_language,
+            },
+        )
+        page = await context.new_page()
+
+        response = await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=settings.page_navigation_timeout_ms,
+        )
+        if response is not None and response.status >= 400:
+            return _error_result(f"HTTP {response.status}: {response.status_text}")
+
+        waited_selector = await _wait_for_page_ready(page, url, css_selector)
+        logger.info(
+            "Dynamic fetch ready for %s using selector=%r",
+            url,
+            waited_selector,
+        )
+
+        if settings.dynamic_wait_ms > 0:
+            await page.wait_for_timeout(settings.dynamic_wait_ms)
+
+        return {"html": await page.content()}
+    except PlaywrightTimeoutError as exc:
+        raise ScrapeTimeoutError(f"Page timeout: {exc}") from exc
+    except PlaywrightError as exc:
+        if _is_browser_restartable_error(exc):
+            raise BrowserSessionError(str(exc)) from exc
+        if _is_timeout_error(exc):
+            raise ScrapeTimeoutError(f"Page timeout: {exc}") from exc
+        raise
+    except Exception as exc:
+        if _is_browser_restartable_error(exc):
+            raise BrowserSessionError(str(exc)) from exc
+        if _is_timeout_error(exc):
+            raise ScrapeTimeoutError(f"Page timeout: {exc}") from exc
+        raise
+    finally:
+        if page is not None:
+            with contextlib.suppress(Exception):
+                await page.close()
+        if context is not None:
+            with contextlib.suppress(Exception):
+                await context.close()
+
+
+async def _wait_for_page_ready(page, url: str, css_selector: str | None = None) -> str:
+    last_timeout: PlaywrightTimeoutError | None = None
+
+    for selector in _get_wait_selectors(url, css_selector):
+        try:
+            await page.locator(selector).first.wait_for(
+                state=settings.dynamic_wait_selector_state,
+                timeout=settings.page_selector_timeout_ms,
+            )
+            return selector
+        except PlaywrightTimeoutError as exc:
+            last_timeout = exc
+            logger.info(
+                "Selector %r did not become ready for %s within %dms",
+                selector,
+                url,
+                settings.page_selector_timeout_ms,
+            )
+
+    if last_timeout is not None:
+        raise ScrapeTimeoutError(
+            f"Timed out waiting for page readiness on {url}: {last_timeout}"
+        ) from last_timeout
+
+    raise ScrapeTimeoutError(f"Timed out waiting for page readiness on {url}")
 
 
 def _decode_response_body(response) -> str:
@@ -320,20 +355,41 @@ def _join_raw_content(existing: str | None, extra: str | None) -> str | None:
     return "\n".join(parts)[:settings.max_content_length]
 
 
-def _get_wait_selector(url: str, css_selector: str | None = None) -> str | None:
+def _get_wait_selectors(url: str, css_selector: str | None = None) -> list[str]:
+    selectors: list[str] = []
     if css_selector:
-        return css_selector
+        selectors.append(css_selector)
 
     hostname = (urlparse(url).hostname or "").lower()
     if "target." in hostname:
-        return "h1"
-    if "amazon." in hostname:
-        return "#ppd"
-    if "walmart." in hostname:
-        return "[data-testid='price-wrap']"
-    if "bestbuy." in hostname:
-        return ".priceView-hero-price"
-    if "costco." in hostname:
-        return "#pull-right-price"
+        selectors.append("h1")
+    elif "amazon." in hostname:
+        selectors.append("#ppd")
+    elif "walmart." in hostname:
+        selectors.append("[data-testid='price-wrap']")
+    elif "bestbuy." in hostname:
+        selectors.append(".priceView-hero-price")
+    elif "costco." in hostname:
+        selectors.append("#pull-right-price")
+    elif hostname == "store.steampowered.com":
+        selectors.append("[class*='SaleSection_'], .game_area_purchase_game")
+    elif "tcgplayer.com" in hostname:
+        selectors.append("button[id^='btnAddToCart'], .price-points, .product-details")
 
-    return settings.dynamic_default_wait_selector
+    selectors.append(settings.dynamic_default_wait_selector)
+    deduped_selectors: list[str] = []
+    for selector in selectors:
+        if selector not in deduped_selectors:
+            deduped_selectors.append(selector)
+    return deduped_selectors
+
+
+def _normalize_css_selector(url: str, css_selector: str | None) -> str | None:
+    if not css_selector:
+        return css_selector
+
+    hostname = (urlparse(url).hostname or "").lower()
+    if "tcgplayer.com" in hostname and re.search(r"btnAddToCart", css_selector):
+        return "button[id^='btnAddToCart']"
+
+    return css_selector

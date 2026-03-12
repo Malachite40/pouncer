@@ -23,12 +23,12 @@ export const redisConnection = getRedisConnection();
 function parseWorkerConcurrency() {
     const raw = process.env.QUEUE_WORKER_CONCURRENCY;
     if (!raw) {
-        return 2;
+        return 1;
     }
 
     const parsed = Number.parseInt(raw, 10);
     if (Number.isNaN(parsed) || parsed < 1) {
-        return 2;
+        return 1;
     }
 
     return parsed;
@@ -38,7 +38,7 @@ export const workerConcurrency = parseWorkerConcurrency();
 
 export const scraperConcurrencyLimit = parsePositiveInt(
     process.env.SCRAPER_CONCURRENCY_LIMIT,
-    2,
+    1,
 );
 
 export const watchLeaseMs = parsePositiveInt(
