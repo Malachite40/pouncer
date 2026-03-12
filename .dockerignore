@@ -5,6 +5,7 @@ dist
 .gitignore
 .env*
 .turbo
+target
 *.md
 .vscode
 .idea

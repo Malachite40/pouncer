@@ -48,6 +48,27 @@ services:
       start_period: 15s
       retries: 3
 
+  scraper-rs:
+    build:
+      context: .
+      dockerfile: apps/scraper-rs/Dockerfile
+    restart: unless-stopped
+    shm_size: '2gb'
+    ports:
+      - "8002:8002"
+    environment:
+      PORT: "8002"
+      SCRAPE_WORKERS: "${RUST_SCRAPE_WORKERS:-1}"
+      SCRAPE_QUEUE_SIZE: "${RUST_SCRAPE_QUEUE_SIZE:-16}"
+      SCRAPE_ENQUEUE_WAIT_MS: "${RUST_SCRAPE_ENQUEUE_WAIT_MS:-3000}"
+      BROWSER_CONCURRENCY: "${RUST_BROWSER_CONCURRENCY:-1}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
   web:
     build:
       context: .
