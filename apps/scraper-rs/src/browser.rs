@@ -11,7 +11,9 @@ use std::{
 
 use async_trait::async_trait;
 use reqwest::{Client, header};
-use thirtyfour::{ChromiumLikeCapabilities, DesiredCapabilities, WebDriver};
+use thirtyfour::{
+    CapabilitiesHelper, ChromeCapabilities, ChromiumLikeCapabilities, PageLoadStrategy, WebDriver,
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStderr, Command},
@@ -305,30 +307,18 @@ impl BrowserManager {
             css_selector,
             &self.settings.dynamic_default_wait_selector,
         );
-        let first_wait_selector = wait_selectors
-            .first()
-            .cloned()
-            .unwrap_or_else(|| self.settings.dynamic_default_wait_selector.clone());
-
-        match timeout(
-            Duration::from_millis(self.settings.page_navigation_timeout_ms),
-            session.goto(url),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => return Err(map_webdriver_message(err)),
-            Err(_) => {
-                warn!(
-                    url = %url,
-                    timeout_ms = self.settings.page_navigation_timeout_ms,
-                    wait_selector = %first_wait_selector,
-                    "dynamic navigation timed out"
-                );
-                return Err(FetchError::Timeout(format!(
-                    "Page timeout: timed out navigating to {url} after {}ms",
-                    self.settings.page_navigation_timeout_ms
-                )));
+        match session.goto(url).await {
+            Ok(()) => {}
+            Err(err) => {
+                let mapped_error = map_webdriver_message(err);
+                if matches!(&mapped_error, FetchError::Timeout(_)) {
+                    warn!(
+                        url = %url,
+                        timeout_ms = self.settings.page_navigation_timeout_ms,
+                        "dynamic navigation timed out"
+                    );
+                }
+                return Err(mapped_error);
             }
         }
 
@@ -481,6 +471,52 @@ impl DynamicPageFetcher for BrowserManager {
     }
 }
 
+fn build_chrome_capabilities(
+    settings: &Settings,
+    profile_dir: &SessionProfileDir,
+) -> Result<ChromeCapabilities, FetchError> {
+    let mut capabilities = ChromeCapabilities::new();
+    capabilities
+        .set_page_load_strategy(PageLoadStrategy::Eager)
+        .map_err(map_browser_capability_error)?;
+    capabilities
+        .add_arg("--headless=new")
+        .map_err(map_browser_capability_error)?;
+    capabilities
+        .add_arg("--no-sandbox")
+        .map_err(map_browser_capability_error)?;
+    capabilities
+        .add_arg("--disable-dev-shm-usage")
+        .map_err(map_browser_capability_error)?;
+    capabilities
+        .add_arg("--disable-gpu")
+        .map_err(map_browser_capability_error)?;
+    capabilities
+        .add_arg("--disable-software-rasterizer")
+        .map_err(map_browser_capability_error)?;
+    capabilities
+        .add_arg(&profile_dir.chrome_arg())
+        .map_err(map_browser_capability_error)?;
+
+    let language_arg = format!("--lang={}", settings.browser_accept_language);
+    capabilities
+        .add_arg(&language_arg)
+        .map_err(map_browser_capability_error)?;
+
+    let user_agent_arg = format!("--user-agent={}", settings.browser_user_agent);
+    capabilities
+        .add_arg(&user_agent_arg)
+        .map_err(map_browser_capability_error)?;
+
+    if let Some(binary) = settings.chrome_binary_path.as_deref() {
+        capabilities
+            .set_binary(binary)
+            .map_err(map_browser_capability_error)?;
+    }
+
+    Ok(capabilities)
+}
+
 #[derive(Default)]
 struct ChromedriverEngine {
     client: Client,
@@ -534,43 +570,12 @@ impl BrowserEngine for ChromedriverEngine {
         settings: Arc<Settings>,
         profile_dir: SessionProfileDir,
     ) -> Result<Box<dyn BrowserSessionHandle>, FetchError> {
-        let mut capabilities = DesiredCapabilities::chrome();
-        capabilities
-            .add_arg("--headless=new")
-            .map_err(map_browser_capability_error)?;
-        capabilities
-            .add_arg("--no-sandbox")
-            .map_err(map_browser_capability_error)?;
-        capabilities
-            .add_arg("--disable-dev-shm-usage")
-            .map_err(map_browser_capability_error)?;
-        capabilities
-            .add_arg("--disable-gpu")
-            .map_err(map_browser_capability_error)?;
-        capabilities
-            .add_arg("--disable-software-rasterizer")
-            .map_err(map_browser_capability_error)?;
-        capabilities
-            .add_arg(&profile_dir.chrome_arg())
-            .map_err(map_browser_capability_error)?;
-
-        let language_arg = format!("--lang={}", settings.browser_accept_language);
-        capabilities
-            .add_arg(&language_arg)
-            .map_err(map_browser_capability_error)?;
-
-        let user_agent_arg = format!("--user-agent={}", settings.browser_user_agent);
-        capabilities
-            .add_arg(&user_agent_arg)
-            .map_err(map_browser_capability_error)?;
-
-        if let Some(binary) = settings.chrome_binary_path.as_deref() {
-            capabilities
-                .set_binary(binary)
-                .map_err(map_browser_capability_error)?;
-        }
-
+        let capabilities = build_chrome_capabilities(settings.as_ref(), &profile_dir)?;
         let driver = WebDriver::new(&settings.webdriver_url(), capabilities)
+            .await
+            .map_err(map_webdriver_error)?;
+        driver
+            .set_page_load_timeout(Duration::from_millis(settings.page_navigation_timeout_ms))
             .await
             .map_err(map_webdriver_error)?;
 
@@ -802,7 +807,7 @@ fn map_webdriver_error(err: thirtyfour::error::WebDriverError) -> FetchError {
 
 fn map_webdriver_message(message: String) -> FetchError {
     let normalized = message.to_lowercase();
-    if normalized.contains("timeout") {
+    if normalized.contains("timeout") || normalized.contains("timed out") {
         return FetchError::Timeout(format!("Page timeout: {message}"));
     }
     if is_browser_session_message(&normalized) {
@@ -902,14 +907,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn navigation_timeout_returns_fetch_timeout() {
+    async fn chrome_capabilities_use_eager_page_load_strategy() {
+        let profile_dir =
+            SessionProfileDir::new(std::path::Path::new(CHROME_SESSION_ROOT)).expect("profile dir");
+        let capabilities =
+            build_chrome_capabilities(&Settings::default(), &profile_dir).expect("capabilities");
+
+        assert!(matches!(
+            capabilities
+                .page_load_strategy()
+                .expect("page load strategy"),
+            PageLoadStrategy::Eager
+        ));
+    }
+
+    #[tokio::test]
+    async fn navigation_timeout_returns_fetch_timeout_without_marking_browser_unready() {
         let mut settings = Settings::default();
         settings.page_navigation_timeout_ms = 10;
         settings.page_selector_timeout_ms = 10;
         let settings = Arc::new(settings);
-        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::DelayedGoto {
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::GotoError {
             html: "<html><body>ok</body></html>".to_string(),
-            goto_delay_ms: 50,
+            goto_error: "timed out navigating to https://example.com/product after 10ms"
+                .to_string(),
             quit_delay_ms: 0,
         }]));
         let manager = BrowserManager::with_engine(settings, engine);
@@ -923,8 +944,13 @@ mod tests {
             FetchError::Timeout(detail) => detail,
             other => panic!("unexpected fetch error: {other:?}"),
         };
+        assert!(detail.contains("Page timeout:"));
         assert!(detail.contains("timed out navigating to https://example.com/product"));
-        assert!(detail.contains("10ms"));
+
+        let health = manager.health();
+        assert_eq!(health.ready_workers, 1);
+        assert_eq!(health.restart_count, 0);
+        assert_eq!(health.last_browser_error, None);
     }
 
     #[tokio::test]
@@ -933,9 +959,10 @@ mod tests {
         settings.page_navigation_timeout_ms = 10;
         settings.page_selector_timeout_ms = 10;
         let settings = Arc::new(settings);
-        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::DelayedGoto {
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::GotoError {
             html: "<html><body>ok</body></html>".to_string(),
-            goto_delay_ms: 50,
+            goto_error: "timed out navigating to https://example.com/product after 10ms"
+                .to_string(),
             quit_delay_ms: 50,
         }]));
         let manager = BrowserManager::with_engine(settings, engine);
@@ -949,6 +976,7 @@ mod tests {
             FetchError::Timeout(detail) => detail,
             other => panic!("unexpected fetch error: {other:?}"),
         };
+        assert!(detail.contains("Page timeout:"));
         assert!(detail.contains("timed out navigating to https://example.com/product"));
 
         let health = manager.health();
@@ -1023,17 +1051,17 @@ mod tests {
                 FakeSessionPlan::CreateError(err) => Err(err),
                 FakeSessionPlan::Html(html) => Ok(Box::new(FakeSessionHandle {
                     html,
-                    goto_delay_ms: 0,
+                    goto_error: None,
                     quit_delay_ms: 0,
                     _profile_dir: profile_dir,
                 })),
-                FakeSessionPlan::DelayedGoto {
+                FakeSessionPlan::GotoError {
                     html,
-                    goto_delay_ms,
+                    goto_error,
                     quit_delay_ms,
                 } => Ok(Box::new(FakeSessionHandle {
                     html,
-                    goto_delay_ms,
+                    goto_error: Some(goto_error),
                     quit_delay_ms,
                     _profile_dir: profile_dir,
                 })),
@@ -1044,9 +1072,9 @@ mod tests {
     enum FakeSessionPlan {
         CreateError(FetchError),
         Html(String),
-        DelayedGoto {
+        GotoError {
             html: String,
-            goto_delay_ms: u64,
+            goto_error: String,
             quit_delay_ms: u64,
         },
     }
@@ -1072,7 +1100,7 @@ mod tests {
 
     struct FakeSessionHandle {
         html: String,
-        goto_delay_ms: u64,
+        goto_error: Option<String>,
         quit_delay_ms: u64,
         _profile_dir: SessionProfileDir,
     }
@@ -1080,8 +1108,8 @@ mod tests {
     #[async_trait]
     impl BrowserSessionHandle for FakeSessionHandle {
         async fn goto(&mut self, _url: &str) -> Result<(), String> {
-            if self.goto_delay_ms > 0 {
-                sleep(Duration::from_millis(self.goto_delay_ms)).await;
+            if let Some(error) = self.goto_error.clone() {
+                return Err(error);
             }
             Ok(())
         }
