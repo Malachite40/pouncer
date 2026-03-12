@@ -28,7 +28,10 @@ test('classifies timeout and abort errors as transient', () => {
         __testables.classifyScraperError('Scraper request failed: AbortError'),
         'transient',
     );
-    assert.equal(__testables.classifyScraperError('Scrape timed out'), 'transient');
+    assert.equal(
+        __testables.classifyScraperError('Scrape timed out'),
+        'transient',
+    );
     assert.equal(
         __testables.classifyScraperError(
             'Dynamic fetch failed after empty extraction: browser has been closed',
@@ -91,6 +94,25 @@ test('classifies timed-out 200 responses as transient', async () => {
             elementFingerprint: null,
         });
         assert.equal(result.errorType, 'transient');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('returns transient error when fetch aborts before scraper responds', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+        throw new DOMException('This operation was aborted', 'AbortError');
+    }) as typeof fetch;
+
+    try {
+        const result = await checkWatchWithScraper({
+            url: 'https://example.com/product',
+            cssSelector: null,
+            elementFingerprint: null,
+        });
+        assert.equal(result.errorType, 'transient');
+        assert.match(result.error ?? '', /AbortError/);
     } finally {
         globalThis.fetch = originalFetch;
     }

@@ -1,4 +1,8 @@
-import { scraperConcurrencyLimit, scraperUrl } from '../config';
+import {
+    scraperConcurrencyLimit,
+    scraperRequestTimeoutMs,
+    scraperUrl,
+} from '../config';
 import type { ScraperCheckOutcome } from '../types';
 
 class AsyncLimiter {
@@ -70,7 +74,10 @@ export async function checkWatchWithScraper({
 }: CheckWatchInput): Promise<ScraperCheckOutcome> {
     return scraperRequestLimiter.run(async () => {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 45_000);
+        const timeout = setTimeout(
+            () => controller.abort(),
+            scraperRequestTimeoutMs,
+        );
 
         try {
             const response = await fetch(`${scraperUrl}/check`, {
@@ -85,9 +92,9 @@ export async function checkWatchWithScraper({
             });
 
             if (!response.ok) {
-                const body = (await response.json().catch(() => null)) as
-                    | { detail?: unknown }
-                    | null;
+                const body = (await response.json().catch(() => null)) as {
+                    detail?: unknown;
+                } | null;
                 const error =
                     normalizeScraperErrorDetail(body?.detail) ??
                     `Scraper request failed with status ${response.status}`;
@@ -96,10 +103,7 @@ export async function checkWatchWithScraper({
                     stock_status: null,
                     raw_content: null,
                     error,
-                    errorType: classifyScraperError(
-                        error,
-                        response.status,
-                    ),
+                    errorType: classifyScraperError(error, response.status),
                 };
             }
 

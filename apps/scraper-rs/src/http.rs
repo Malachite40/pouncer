@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
@@ -39,6 +39,7 @@ async fn health(State(state): State<AppState>) -> Response {
 }
 
 async fn check(State(state): State<AppState>, Json(request): Json<CheckRequest>) -> Response {
+    let started_at = Instant::now();
     info!(
         url = %request.url,
         css_selector = request.css_selector.as_deref().unwrap_or(""),
@@ -48,12 +49,28 @@ async fn check(State(state): State<AppState>, Json(request): Json<CheckRequest>)
 
     let job = match state.executor.enqueue(request.clone()).await {
         Ok(job) => job,
-        Err(err) => return request_error_response(err),
+        Err(err) => {
+            warn!(
+                url = %request.url,
+                status = %err.status_code,
+                detail = ?&err.detail,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "scrape request failed"
+            );
+            return request_error_response(err);
+        }
     };
 
     let result = job.wait().await;
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
     if result.status_code != StatusCode::OK {
-        warn!(status = %result.status_code, detail = ?result.detail, "scrape request failed");
+        warn!(
+            url = %request.url,
+            status = %result.status_code,
+            detail = ?&result.detail,
+            elapsed_ms,
+            "scrape request failed"
+        );
         return error_response(
             result.status_code,
             result
@@ -67,6 +84,7 @@ async fn check(State(state): State<AppState>, Json(request): Json<CheckRequest>)
         price = payload.price,
         stock_status = payload.stock_status.as_deref().unwrap_or(""),
         error = payload.error.as_deref().unwrap_or(""),
+        elapsed_ms,
         "scrape request completed"
     );
     (StatusCode::OK, Json(payload)).into_response()

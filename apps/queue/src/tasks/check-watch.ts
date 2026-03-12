@@ -73,11 +73,19 @@ export async function handleCheckWatch(payload: CheckWatchPayload) {
     }
 
     try {
+        const scrapeStartedAt = Date.now();
         const result = await checkWatchWithScraper({
             url: watch.url,
             cssSelector: watch.cssSelector,
             elementFingerprint: watch.elementFingerprint,
         });
+        const scrapeElapsedMs = Date.now() - scrapeStartedAt;
+
+        if (result.errorType) {
+            console.warn(
+                `[queue] Scrape result watchId=${watch.id} url=${watch.url} errorType=${result.errorType} elapsed_ms=${scrapeElapsedMs} error=${JSON.stringify(result.error)}`,
+            );
+        }
 
         const price = result.price ?? null;
         const stockStatus = nullIfUndefined(result.stock_status);

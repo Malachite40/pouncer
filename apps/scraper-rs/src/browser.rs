@@ -16,7 +16,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStderr, Command},
     sync::{Mutex, Semaphore},
-    time::sleep,
+    time::{sleep, timeout},
 };
 use tracing::{error, info, warn};
 
@@ -268,8 +268,40 @@ impl BrowserManager {
         url: &str,
         css_selector: Option<&str>,
     ) -> Result<PageFetchOutcome, FetchError> {
-        session.goto(url).await.map_err(map_webdriver_message)?;
-        self.wait_for_page_ready(session, url, css_selector).await?;
+        let wait_selectors = get_wait_selectors(
+            url,
+            css_selector,
+            &self.settings.dynamic_default_wait_selector,
+        );
+        let first_wait_selector = wait_selectors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.settings.dynamic_default_wait_selector.clone());
+
+        match timeout(
+            Duration::from_millis(self.settings.page_navigation_timeout_ms),
+            session.goto(url),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(map_webdriver_message(err)),
+            Err(_) => {
+                warn!(
+                    url = %url,
+                    timeout_ms = self.settings.page_navigation_timeout_ms,
+                    wait_selector = %first_wait_selector,
+                    "dynamic navigation timed out"
+                );
+                return Err(FetchError::Timeout(format!(
+                    "Page timeout: timed out navigating to {url} after {}ms",
+                    self.settings.page_navigation_timeout_ms
+                )));
+            }
+        }
+
+        self.wait_for_page_ready(session, url, &wait_selectors)
+            .await?;
         if self.settings.dynamic_wait_ms > 0 {
             sleep(Duration::from_millis(self.settings.dynamic_wait_ms)).await;
         }
@@ -281,19 +313,14 @@ impl BrowserManager {
         &self,
         session: &mut dyn BrowserSessionHandle,
         url: &str,
-        css_selector: Option<&str>,
+        selectors: &[String],
     ) -> Result<(), FetchError> {
-        let selectors = get_wait_selectors(
-            url,
-            css_selector,
-            &self.settings.dynamic_default_wait_selector,
-        );
         let mut last_error = None;
 
         for selector in selectors {
             match wait_for_selector(
                 session,
-                &selector,
+                selector,
                 Duration::from_millis(self.settings.page_selector_timeout_ms),
             )
             .await
@@ -811,6 +838,30 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn navigation_timeout_returns_fetch_timeout() {
+        let mut settings = Settings::default();
+        settings.page_navigation_timeout_ms = 10;
+        let settings = Arc::new(settings);
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::DelayedGoto {
+            html: "<html><body>ok</body></html>".to_string(),
+            goto_delay_ms: 50,
+        }]));
+        let manager = BrowserManager::with_engine(settings, engine);
+
+        let err = manager
+            .fetch("https://example.com/product", Some("#cta"))
+            .await
+            .expect_err("fetch should time out during navigation");
+
+        let detail = match err {
+            FetchError::Timeout(detail) => detail,
+            other => panic!("unexpected fetch error: {other:?}"),
+        };
+        assert!(detail.contains("timed out navigating to https://example.com/product"));
+        assert!(detail.contains("10ms"));
+    }
+
     struct FakeBrowserEngine {
         state: Arc<FakeBrowserEngineState>,
     }
@@ -874,6 +925,15 @@ mod tests {
                 FakeSessionPlan::CreateError(err) => Err(err),
                 FakeSessionPlan::Html(html) => Ok(Box::new(FakeSessionHandle {
                     html,
+                    goto_delay_ms: 0,
+                    _profile_dir: profile_dir,
+                })),
+                FakeSessionPlan::DelayedGoto {
+                    html,
+                    goto_delay_ms,
+                } => Ok(Box::new(FakeSessionHandle {
+                    html,
+                    goto_delay_ms,
                     _profile_dir: profile_dir,
                 })),
             }
@@ -883,6 +943,7 @@ mod tests {
     enum FakeSessionPlan {
         CreateError(FetchError),
         Html(String),
+        DelayedGoto { html: String, goto_delay_ms: u64 },
     }
 
     struct FakeProcessHandle {
@@ -906,12 +967,16 @@ mod tests {
 
     struct FakeSessionHandle {
         html: String,
+        goto_delay_ms: u64,
         _profile_dir: SessionProfileDir,
     }
 
     #[async_trait]
     impl BrowserSessionHandle for FakeSessionHandle {
         async fn goto(&mut self, _url: &str) -> Result<(), String> {
+            if self.goto_delay_ms > 0 {
+                sleep(Duration::from_millis(self.goto_delay_ms)).await;
+            }
             Ok(())
         }
 

@@ -18,6 +18,10 @@ function parsePositiveInt(value: string | undefined, fallback: number) {
     return parsed;
 }
 
+function parseScraperRequestTimeoutMs(value: string | undefined) {
+    return parsePositiveInt(value, 60_000);
+}
+
 export const redisConnection = getRedisConnection();
 
 function parseWorkerConcurrency() {
@@ -41,6 +45,12 @@ export const scraperConcurrencyLimit = parsePositiveInt(
     1,
 );
 
+// Keep this at least 5000ms above scraper-rs SCRAPE_JOB_TIMEOUT_MS so the
+// queue gets a structured 504 instead of aborting the request first.
+export const scraperRequestTimeoutMs = parseScraperRequestTimeoutMs(
+    process.env.SCRAPER_REQUEST_TIMEOUT_MS,
+);
+
 export const watchLeaseMs = parsePositiveInt(
     process.env.WATCH_CHECK_LEASE_MS,
     120_000,
@@ -55,3 +65,8 @@ export const watchOverloadBackoffMs = parsePositiveInt(
     process.env.WATCH_CHECK_OVERLOAD_BACKOFF_MS,
     300_000,
 );
+
+export const __testables = {
+    parsePositiveInt,
+    parseScraperRequestTimeoutMs,
+};
