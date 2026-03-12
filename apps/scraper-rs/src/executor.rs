@@ -256,6 +256,7 @@ impl ScrapeExecutor {
             browser_workers_ready: browser_health.ready_workers,
             browser_restarts: browser_health.restart_count,
             last_launch_error: browser_health.last_launch_error,
+            last_browser_error: browser_health.last_browser_error,
         }
     }
 

@@ -8,6 +8,7 @@ pub struct BrowserHealth {
     pub ready_workers: usize,
     pub restart_count: usize,
     pub last_launch_error: Option<String>,
+    pub last_browser_error: Option<String>,
 }
 
 #[derive(Debug)]

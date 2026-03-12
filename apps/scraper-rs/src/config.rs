@@ -20,6 +20,7 @@ pub struct Settings {
     pub health_stuck_grace_ms: u64,
     pub browser_concurrency: usize,
     pub chromedriver_path: String,
+    pub chromedriver_verbose_log: bool,
     pub chrome_binary_path: Option<String>,
     pub webdriver_port: u16,
     pub browser_user_agent: String,
@@ -47,6 +48,7 @@ impl Default for Settings {
             health_stuck_grace_ms: 5_000,
             browser_concurrency: 1,
             chromedriver_path: "chromedriver".to_string(),
+            chromedriver_verbose_log: false,
             chrome_binary_path: None,
             webdriver_port: 9515,
             browser_user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36".to_string(),
@@ -91,6 +93,8 @@ impl Settings {
                 .unwrap_or(defaults.browser_concurrency),
             chromedriver_path: env_string("CHROMEDRIVER_PATH")
                 .unwrap_or(defaults.chromedriver_path),
+            chromedriver_verbose_log: env_bool("CHROMEDRIVER_VERBOSE_LOG")
+                .unwrap_or(defaults.chromedriver_verbose_log),
             chrome_binary_path: env_string("CHROME_BINARY_PATH"),
             webdriver_port: env_u16("WEBDRIVER_PORT").unwrap_or(defaults.webdriver_port),
             browser_user_agent: env_string("BROWSER_USER_AGENT")
@@ -119,4 +123,12 @@ fn env_u64(key: &str) -> Option<u64> {
 
 fn env_usize(key: &str) -> Option<usize> {
     env_string(key)?.parse().ok()
+}
+
+fn env_bool(key: &str) -> Option<bool> {
+    match env_string(key)?.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }

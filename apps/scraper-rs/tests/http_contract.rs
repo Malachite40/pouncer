@@ -28,6 +28,7 @@ struct FakeRunner {
 enum FakeRunnerResponse {
     Success(CheckResponse),
     Timeout(String),
+    BrowserSession(String),
     BlockingSuccess {
         started: Arc<Notify>,
         release: Arc<Notify>,
@@ -52,6 +53,9 @@ impl ScrapeRunner for FakeRunner {
         match &self.response {
             FakeRunnerResponse::Success(payload) => Ok(payload.clone()),
             FakeRunnerResponse::Timeout(detail) => Err(ScrapeFailure::Timeout(detail.clone())),
+            FakeRunnerResponse::BrowserSession(detail) => {
+                Err(ScrapeFailure::BrowserSession(detail.clone()))
+            }
             FakeRunnerResponse::BlockingSuccess {
                 started,
                 release,
@@ -74,6 +78,7 @@ async fn health_reports_degraded_executor_payload() {
             ready_workers: 0,
             restart_count: 2,
             last_launch_error: Some("boom".to_string()),
+            last_browser_error: Some("session not created".to_string()),
         },
         response: FakeRunnerResponse::Success(CheckResponse::default()),
         starts: AtomicUsize::new(0),
@@ -97,6 +102,10 @@ async fn health_reports_degraded_executor_payload() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["detail"]["browser_workers_ready"], 0);
     assert_eq!(payload["detail"]["last_launch_error"], "boom");
+    assert_eq!(
+        payload["detail"]["last_browser_error"],
+        "session not created"
+    );
 
     executor.shutdown().await;
 }
@@ -171,6 +180,46 @@ async fn check_propagates_timeout_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["detail"]["status"], "timeout");
+
+    executor.shutdown().await;
+}
+
+#[tokio::test]
+async fn check_propagates_browser_session_status() {
+    let settings = Arc::new(Settings::default());
+    let runner = Arc::new(FakeRunner {
+        health: BrowserHealth {
+            total_workers: 1,
+            ready_workers: 0,
+            restart_count: 1,
+            last_launch_error: None,
+            last_browser_error: Some("chrome not reachable".to_string()),
+        },
+        response: FakeRunnerResponse::BrowserSession("chrome not reachable".to_string()),
+        starts: AtomicUsize::new(0),
+    });
+    let executor = Arc::new(ScrapeExecutor::new(settings, runner));
+    executor.start().await.expect("executor start");
+    let app = build_router(executor.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/check")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "url": "https://example.com/product" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("check response");
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["detail"]["reason"], "browser_restart_required");
 
     executor.shutdown().await;
 }

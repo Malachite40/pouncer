@@ -29,9 +29,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --system --gid 1001 appgroup && \
     useradd --system --uid 1001 --gid appgroup appuser
 
+RUN mkdir -p /home/appuser \
+    /tmp/pounce/config \
+    /tmp/pounce/cache \
+    /tmp/pounce/runtime \
+    /tmp/pounce/sessions && \
+    chown -R appuser:appgroup /home/appuser /tmp/pounce
+
 COPY --from=builder /app/target/release/pounce-scraper-rs /usr/local/bin/pounce-scraper-rs
 
 ENV PORT=8002
+ENV HOME=/home/appuser
+ENV XDG_CONFIG_HOME=/tmp/pounce/config
+ENV XDG_CACHE_HOME=/tmp/pounce/cache
+ENV XDG_RUNTIME_DIR=/tmp/pounce/runtime
 ENV CHROME_BINARY_PATH=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 

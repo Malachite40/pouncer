@@ -33,6 +33,7 @@ jobs:
         run: |
           npx --package @railway/cli railway up -d -s "web"
           npx --package @railway/cli railway up -d -s "scraper"
+          npx --package @railway/cli railway up -d -s "scraper-rs"
           npx --package @railway/cli railway up -d -s "cron"
           npx --package @railway/cli railway up -d -s "queue"
         env:

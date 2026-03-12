@@ -31,4 +31,5 @@ pub struct HealthPayload {
     pub browser_workers_ready: usize,
     pub browser_restarts: usize,
     pub last_launch_error: Option<String>,
+    pub last_browser_error: Option<String>,
 }
