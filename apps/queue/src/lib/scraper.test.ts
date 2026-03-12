@@ -46,6 +46,21 @@ test('classifies health-derived overload messages as scraper overload', () => {
     );
 });
 
+test('classifies browser resource exhaustion as scraper overload', () => {
+    assert.equal(
+        __testables.classifyScraperError(
+            'Scrape failed: BrowserType.launch_persistent_context: Connection closed while reading from the driver',
+        ),
+        'scraper_overloaded',
+    );
+    assert.equal(
+        __testables.classifyScraperError(
+            'Scrape failed: [Errno 11] Resource temporarily unavailable',
+        ),
+        'scraper_overloaded',
+    );
+});
+
 test('normalizes structured health error detail', () => {
     assert.equal(
         __testables.normalizeScraperErrorDetail({

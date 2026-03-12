@@ -94,6 +94,20 @@ def test_run_scrape_subprocess_times_out_and_kills_process(monkeypatch):
     assert process.killed is True
 
 
+def test_run_scrape_subprocess_reports_resource_exhaustion(monkeypatch):
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        raise OSError(11, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(
+        "app.main.asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    result = asyncio.run(_run_scrape_subprocess("https://example.com/product"))
+
+    assert result["error"] == "Scraper overloaded: process resources exhausted"
+
+
 def test_health_reports_stuck_workers(monkeypatch):
     queue = asyncio.Queue(maxsize=4)
     app.state.scrape_queue = queue

@@ -148,6 +148,11 @@ function classifyScraperError(
         message.includes('queue is full') ||
         message.includes('stuck_workers') ||
         message.includes('scraper is at capacity') ||
+        message.includes('scraper overloaded') ||
+        message.includes('resource temporarily unavailable') ||
+        message.includes('process resources exhausted') ||
+        message.includes('connection closed while reading from the driver') ||
+        message.includes('launch_persistent_context') ||
         message.includes('503')
     ) {
         return 'scraper_overloaded';

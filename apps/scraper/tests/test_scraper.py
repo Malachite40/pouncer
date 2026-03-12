@@ -97,6 +97,7 @@ def test_dynamic_fetch_uses_request_scoped_session_and_cleans_profile(monkeypatc
     monkeypatch.setattr(scraper, "_create_dynamic_profile_dir", lambda: "/tmp/pounce-profile-1")
     monkeypatch.setattr(scraper, "_cleanup_profile_dir", lambda path: cleaned_dirs.append(path))
     monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
+    monkeypatch.setattr(scraper.settings, "dynamic_use_persistent_context", True)
 
     result = scraper._fetch_dynamic_page("https://example.com/product")
 
@@ -138,6 +139,7 @@ def test_dynamic_fetch_retries_transient_target_closed_with_fresh_session(monkey
     monkeypatch.setattr(scraper, "_cleanup_profile_dir", lambda path: cleaned_dirs.append(path))
     monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
     monkeypatch.setattr(scraper.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(scraper.settings, "dynamic_use_persistent_context", True)
 
     result = scraper._fetch_dynamic_page("https://example.com/product")
 
@@ -163,6 +165,7 @@ def test_dynamic_fetch_cleans_profile_when_session_raises(monkeypatch):
     monkeypatch.setattr(scraper, "_create_dynamic_profile_dir", lambda: "/tmp/pounce-profile-1")
     monkeypatch.setattr(scraper, "_cleanup_profile_dir", lambda path: cleaned_dirs.append(path))
     monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
+    monkeypatch.setattr(scraper.settings, "dynamic_use_persistent_context", True)
 
     try:
         scraper._fetch_dynamic_page("https://example.com/product")
@@ -172,3 +175,56 @@ def test_dynamic_fetch_cleans_profile_when_session_raises(monkeypatch):
         raise AssertionError("Expected dynamic fetch to raise")
 
     assert cleaned_dirs == ["/tmp/pounce-profile-1"]
+
+
+def test_dynamic_fetch_avoids_persistent_context_by_default(monkeypatch):
+    captured_kwargs: dict | None = None
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            nonlocal captured_kwargs
+            captured_kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def fetch(self, url):
+            class Response:
+                status = 200
+                reason = "OK"
+                body = "<html><body>ok</body></html>"
+                encoding = "utf-8"
+
+            return Response()
+
+    monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
+    monkeypatch.setattr(scraper.settings, "dynamic_use_persistent_context", False)
+
+    result = scraper._fetch_dynamic_page("https://example.com/product")
+
+    assert result == {"html": "<html><body>ok</body></html>"}
+    assert captured_kwargs is not None
+    assert "user_data_dir" not in captured_kwargs
+
+
+def test_dynamic_fetch_reports_resource_exhaustion_as_overload(monkeypatch):
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            raise RuntimeError("BrowserType.launch_persistent_context: Connection closed while reading from the driver")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(scraper, "DynamicSession", FakeSession)
+
+    result = scraper._fetch_dynamic_page("https://example.com/product")
+
+    assert result == scraper._error_result(
+        "Scraper overloaded: browser launch failed due to resource exhaustion"
+    )

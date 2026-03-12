@@ -32,6 +32,15 @@ _STOCK_SOURCE_PRIORITIES = {
     "meta": 10,
 }
 
+_RESOURCE_EXHAUSTION_MARKERS = (
+    "resource temporarily unavailable",
+    "connection closed while reading from the driver",
+    "browsertype.launch_persistent_context",
+    "browsertype.launch:",
+    "too many open files",
+    "cannot allocate memory",
+)
+
 
 def scrape_product(url: str, css_selector: str | None = None, element_fingerprint: str | None = None) -> ScrapeResult:
     """Scrape a product page for price and stock information."""
@@ -160,11 +169,20 @@ def _is_transient_browser_close(exc: Exception) -> bool:
     )
 
 
+def _is_browser_resource_exhaustion(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _RESOURCE_EXHAUSTION_MARKERS)
+
+
 def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
     wait_selector = _get_wait_selector(url, css_selector)
     response = None
     for attempt in range(1, settings.dynamic_fetch_retries + 1):
-        profile_dir = _create_dynamic_profile_dir()
+        profile_dir = (
+            _create_dynamic_profile_dir()
+            if settings.dynamic_use_persistent_context
+            else None
+        )
         try:
             logger.info(
                 "Dynamic fetch attempt %d for %s using profile_dir=%s",
@@ -172,7 +190,7 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
                 url,
                 profile_dir,
             )
-            with DynamicSession(
+            session_kwargs = dict(
                 headless=True,
                 timeout=settings.dynamic_timeout_ms,
                 wait=settings.dynamic_wait_ms,
@@ -181,14 +199,21 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
                 disable_resources=False,
                 google_search=True,
                 locale="en-US",
-                user_data_dir=profile_dir,
                 retries=1,
                 retry_delay=0,
-            ) as session:
+            )
+            if profile_dir is not None:
+                session_kwargs["user_data_dir"] = profile_dir
+
+            with DynamicSession(**session_kwargs) as session:
                 response = session.fetch(url)
                 break
         except Exception as exc:
             logger.exception("Dynamic fetch crashed for %s on attempt %d", url, attempt)
+            if _is_browser_resource_exhaustion(exc):
+                return _error_result(
+                    "Scraper overloaded: browser launch failed due to resource exhaustion"
+                )
             if attempt >= settings.dynamic_fetch_retries or not _is_transient_browser_close(exc):
                 raise
             backoff_s = settings.dynamic_retry_backoff_ms / 1000
@@ -199,7 +224,8 @@ def _fetch_dynamic_page(url: str, css_selector: str | None = None) -> dict:
             )
             time.sleep(backoff_s)
         finally:
-            _cleanup_profile_dir(profile_dir)
+            if profile_dir is not None:
+                _cleanup_profile_dir(profile_dir)
 
     if response is None:
         return _error_result("Dynamic fetch failed without a response")

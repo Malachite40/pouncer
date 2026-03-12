@@ -125,12 +125,23 @@ async def _run_scrape_subprocess(
     if element_fingerprint:
         command.extend(["--element-fingerprint", element_fingerprint])
 
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=os.path.dirname(os.path.dirname(__file__)),
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=os.path.dirname(os.path.dirname(__file__)),
+        )
+    except OSError as exc:
+        if exc.errno == 11:
+            logger.error("Scrape subprocess launch failed due to resource exhaustion")
+            return {
+                "price": None,
+                "stock_status": None,
+                "raw_content": None,
+                "error": "Scraper overloaded: process resources exhausted",
+            }
+        raise
 
     try:
         stdout, stderr = await asyncio.wait_for(
