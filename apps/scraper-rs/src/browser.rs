@@ -18,7 +18,7 @@ use tokio::{
     sync::{Mutex, Semaphore},
     time::{sleep, timeout},
 };
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::{config::Settings, runner::BrowserHealth, scrape::get_wait_selectors};
 
@@ -256,9 +256,38 @@ impl BrowserManager {
         let result = self
             .fetch_with_session(session.as_mut(), url, css_selector)
             .await;
-        if let Err(err) = session.quit().await {
-            error!(error = %err, "failed to quit webdriver session");
+
+        match timeout(
+            Duration::from_millis(self.settings.page_selector_timeout_ms),
+            session.quit(),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                let detail = format!("failed to quit webdriver session: {err}");
+                warn!(
+                    url = %url,
+                    timeout_ms = self.settings.page_selector_timeout_ms,
+                    error = %err,
+                    "webdriver session cleanup failed; recycling chromedriver"
+                );
+                self.reset_browser(detail).await;
+            }
+            Err(_) => {
+                let detail = format!(
+                    "timed out quitting webdriver session after {}ms",
+                    self.settings.page_selector_timeout_ms
+                );
+                warn!(
+                    url = %url,
+                    timeout_ms = self.settings.page_selector_timeout_ms,
+                    "webdriver session cleanup timed out; recycling chromedriver"
+                );
+                self.reset_browser(detail).await;
+            }
         }
+
         result
     }
 
@@ -842,10 +871,12 @@ mod tests {
     async fn navigation_timeout_returns_fetch_timeout() {
         let mut settings = Settings::default();
         settings.page_navigation_timeout_ms = 10;
+        settings.page_selector_timeout_ms = 10;
         let settings = Arc::new(settings);
         let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::DelayedGoto {
             html: "<html><body>ok</body></html>".to_string(),
             goto_delay_ms: 50,
+            quit_delay_ms: 0,
         }]));
         let manager = BrowserManager::with_engine(settings, engine);
 
@@ -860,6 +891,39 @@ mod tests {
         };
         assert!(detail.contains("timed out navigating to https://example.com/product"));
         assert!(detail.contains("10ms"));
+    }
+
+    #[tokio::test]
+    async fn quit_timeout_after_navigation_timeout_recycles_browser() {
+        let mut settings = Settings::default();
+        settings.page_navigation_timeout_ms = 10;
+        settings.page_selector_timeout_ms = 10;
+        let settings = Arc::new(settings);
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::DelayedGoto {
+            html: "<html><body>ok</body></html>".to_string(),
+            goto_delay_ms: 50,
+            quit_delay_ms: 50,
+        }]));
+        let manager = BrowserManager::with_engine(settings, engine);
+
+        let err = manager
+            .fetch("https://example.com/product", Some("#cta"))
+            .await
+            .expect_err("fetch should still return the navigation timeout");
+
+        let detail = match err {
+            FetchError::Timeout(detail) => detail,
+            other => panic!("unexpected fetch error: {other:?}"),
+        };
+        assert!(detail.contains("timed out navigating to https://example.com/product"));
+
+        let health = manager.health();
+        assert_eq!(health.ready_workers, 0);
+        assert_eq!(health.restart_count, 1);
+        assert_eq!(
+            health.last_browser_error.as_deref(),
+            Some("timed out quitting webdriver session after 10ms")
+        );
     }
 
     struct FakeBrowserEngine {
@@ -926,14 +990,17 @@ mod tests {
                 FakeSessionPlan::Html(html) => Ok(Box::new(FakeSessionHandle {
                     html,
                     goto_delay_ms: 0,
+                    quit_delay_ms: 0,
                     _profile_dir: profile_dir,
                 })),
                 FakeSessionPlan::DelayedGoto {
                     html,
                     goto_delay_ms,
+                    quit_delay_ms,
                 } => Ok(Box::new(FakeSessionHandle {
                     html,
                     goto_delay_ms,
+                    quit_delay_ms,
                     _profile_dir: profile_dir,
                 })),
             }
@@ -943,7 +1010,11 @@ mod tests {
     enum FakeSessionPlan {
         CreateError(FetchError),
         Html(String),
-        DelayedGoto { html: String, goto_delay_ms: u64 },
+        DelayedGoto {
+            html: String,
+            goto_delay_ms: u64,
+            quit_delay_ms: u64,
+        },
     }
 
     struct FakeProcessHandle {
@@ -968,6 +1039,7 @@ mod tests {
     struct FakeSessionHandle {
         html: String,
         goto_delay_ms: u64,
+        quit_delay_ms: u64,
         _profile_dir: SessionProfileDir,
     }
 
@@ -989,6 +1061,9 @@ mod tests {
         }
 
         async fn quit(&mut self) -> Result<(), String> {
+            if self.quit_delay_ms > 0 {
+                sleep(Duration::from_millis(self.quit_delay_ms)).await;
+            }
             Ok(())
         }
     }
