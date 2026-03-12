@@ -23,7 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
     chromium-driver \
-    curl && \
+    curl \
+    procps && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1001 appgroup && \
@@ -34,7 +35,8 @@ RUN mkdir -p /home/appuser \
     /tmp/pounce/cache \
     /tmp/pounce/runtime \
     /tmp/pounce/sessions && \
-    chown -R appuser:appgroup /home/appuser /tmp/pounce
+    chown -R appuser:appgroup /home/appuser /tmp/pounce && \
+    chmod 700 /tmp/pounce/runtime
 
 COPY --from=builder /app/target/release/pounce-scraper-rs /usr/local/bin/pounce-scraper-rs
 

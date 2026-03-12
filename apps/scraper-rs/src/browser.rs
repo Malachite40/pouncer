@@ -23,6 +23,8 @@ use tracing::{info, warn};
 use crate::{config::Settings, runner::BrowserHealth, scrape::get_wait_selectors};
 
 const CHROME_SESSION_ROOT: &str = "/tmp/pounce/sessions";
+#[cfg(target_os = "linux")]
+const CHROME_SESSION_MATCH: &str = "/tmp/pounce/sessions/chrome-profile-";
 static NEXT_CHROME_PROFILE_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
@@ -233,6 +235,7 @@ impl BrowserManager {
                 warn!(error = %err, "failed to recycle chromedriver cleanly");
             }
         }
+        cleanup_orphaned_chrome_processes().await;
     }
 
     async fn mark_session_recovered(&self) {
@@ -385,6 +388,7 @@ impl DynamicPageFetcher for BrowserManager {
                 warn!(error = %err, "failed to stop chromedriver cleanly");
             }
         }
+        cleanup_orphaned_chrome_processes().await;
     }
 
     fn health(&self) -> BrowserHealth {
@@ -717,6 +721,36 @@ async fn log_chromedriver_stderr(stderr: ChildStderr) {
             Err(err) => {
                 warn!(error = %err, "failed to read chromedriver stderr");
                 break;
+            }
+        }
+    }
+}
+
+async fn cleanup_orphaned_chrome_processes() {
+    #[cfg(target_os = "linux")]
+    {
+        match Command::new("pkill")
+            .arg("-f")
+            .arg(CHROME_SESSION_MATCH)
+            .status()
+            .await
+        {
+            Ok(status) if status.success() => {
+                warn!(
+                    pattern = CHROME_SESSION_MATCH,
+                    "cleaned up orphaned chrome processes"
+                );
+            }
+            Ok(status) if status.code() == Some(1) => {}
+            Ok(status) => {
+                warn!(
+                    pattern = CHROME_SESSION_MATCH,
+                    code = status.code().unwrap_or_default(),
+                    "chrome process cleanup exited unexpectedly"
+                );
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to invoke chrome process cleanup");
             }
         }
     }
