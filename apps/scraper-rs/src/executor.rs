@@ -9,7 +9,7 @@ use std::{
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tokio::{
-    sync::{Mutex, mpsc, oneshot},
+    sync::{Mutex, mpsc, oneshot, watch},
     task::JoinHandle,
     time::timeout,
 };
@@ -18,7 +18,7 @@ use tracing::{info, warn};
 use crate::{
     config::Settings,
     models::{CheckRequest, CheckResponse, HealthPayload},
-    runner::{ScrapeFailure, ScrapeRunner},
+    runner::{BrowserHealth, ScrapeFailure, ScrapeWorker, ScrapeWorkerFactory},
 };
 
 #[derive(Debug)]
@@ -59,26 +59,38 @@ impl ScrapeJobHandle {
 
 struct WorkerState {
     index: usize,
+    browser_enabled: bool,
+    ready: bool,
+    restart_count: usize,
+    last_launch_error: Option<String>,
+    last_browser_error: Option<String>,
     in_flight_started_at: Option<Instant>,
 }
 
 pub struct ScrapeExecutor {
     settings: Arc<Settings>,
-    runner: Arc<dyn ScrapeRunner>,
+    worker_factory: Arc<dyn ScrapeWorkerFactory>,
     sender: mpsc::Sender<ScrapeJob>,
     receiver: Arc<Mutex<mpsc::Receiver<ScrapeJob>>>,
+    shutdown_tx: watch::Sender<bool>,
     queue_depth: Arc<AtomicUsize>,
     worker_states: Vec<Arc<Mutex<WorkerState>>>,
     worker_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl ScrapeExecutor {
-    pub fn new(settings: Arc<Settings>, runner: Arc<dyn ScrapeRunner>) -> Self {
+    pub fn new(settings: Arc<Settings>, worker_factory: Arc<dyn ScrapeWorkerFactory>) -> Self {
         let (sender, receiver) = mpsc::channel(settings.scrape_queue_size);
+        let (shutdown_tx, _) = watch::channel(false);
         let worker_states = (0..settings.scrape_workers)
             .map(|index| {
                 Arc::new(Mutex::new(WorkerState {
                     index,
+                    browser_enabled: index < settings.browser_concurrency,
+                    ready: index >= settings.browser_concurrency,
+                    restart_count: 0,
+                    last_launch_error: None,
+                    last_browser_error: None,
                     in_flight_started_at: None,
                 }))
             })
@@ -86,9 +98,10 @@ impl ScrapeExecutor {
 
         Self {
             settings,
-            runner,
+            worker_factory,
             sender,
             receiver: Arc::new(Mutex::new(receiver)),
+            shutdown_tx,
             queue_depth: Arc::new(AtomicUsize::new(0)),
             worker_states,
             worker_tasks: Mutex::new(Vec::new()),
@@ -96,39 +109,42 @@ impl ScrapeExecutor {
     }
 
     pub async fn start(&self) -> Result<(), ScrapeRequestError> {
-        self.runner
-            .start()
-            .await
-            .map_err(|failure| ScrapeRequestError {
-                status_code: StatusCode::SERVICE_UNAVAILABLE,
-                detail: self.service_detail(
-                    "scrape_runner_start_failed",
-                    None,
-                    None,
-                    Some(match failure {
-                        ScrapeFailure::Timeout(detail) | ScrapeFailure::BrowserSession(detail) => {
-                            detail
-                        }
-                    }),
-                ),
-            })?;
-
         let mut worker_tasks = self.worker_tasks.lock().await;
         if !worker_tasks.is_empty() {
             return Ok(());
         }
 
+        let mut startup_rxs = Vec::new();
         for worker_state in &self.worker_states {
             let receiver = self.receiver.clone();
-            let runner = self.runner.clone();
+            let worker_factory = self.worker_factory.clone();
             let settings = self.settings.clone();
             let queue_depth = self.queue_depth.clone();
             let state = worker_state.clone();
+            let mut shutdown_rx = self.shutdown_tx.subscribe();
+            let (startup_tx, startup_rx) = oneshot::channel();
+            startup_rxs.push(startup_rx);
+
             worker_tasks.push(tokio::spawn(async move {
+                let index = { state.lock().await.index };
+                let mut worker = worker_factory.create(index);
+                if let Err(failure) = worker.start().await {
+                    warn!(
+                        worker_index = index,
+                        error = %scrape_failure_detail(&failure),
+                        "worker browser startup failed"
+                    );
+                }
+                sync_worker_health(&state, worker.browser_health()).await;
+                let _ = startup_tx.send(());
+
                 loop {
-                    let job = {
-                        let mut receiver = receiver.lock().await;
-                        receiver.recv().await
+                    let job = tokio::select! {
+                        _ = shutdown_rx.changed() => None,
+                        job = async {
+                            let mut receiver = receiver.lock().await;
+                            receiver.recv().await
+                        } => job,
                     };
 
                     let Some(job) = job else {
@@ -136,33 +152,46 @@ impl ScrapeExecutor {
                     };
 
                     queue_depth.fetch_sub(1, Ordering::SeqCst);
-                    let index = {
-                        let mut worker = state.lock().await;
-                        worker.in_flight_started_at = Some(Instant::now());
-                        worker.index
-                    };
+                    {
+                        let mut worker_state = state.lock().await;
+                        worker_state.in_flight_started_at = Some(Instant::now());
+                    }
 
-                    info!(worker_index = index, url = %job.request.url, queue_depth = queue_depth.load(Ordering::SeqCst), waited_ms = job.enqueued_at.elapsed().as_millis() as u64, "worker processing scrape");
+                    info!(
+                        worker_index = index,
+                        url = %job.request.url,
+                        queue_depth = queue_depth.load(Ordering::SeqCst),
+                        waited_ms = job.enqueued_at.elapsed().as_millis() as u64,
+                        "worker processing scrape"
+                    );
 
-                    let result = process_job(
-                        runner.clone(),
-                        settings.clone(),
-                        index,
-                        &job.request,
-                    )
-                    .await;
+                    let result =
+                        process_job(worker.as_mut(), settings.clone(), index, &job.request).await;
 
                     let _ = job.response_tx.send(result);
+                    sync_worker_health(&state, worker.browser_health()).await;
 
-                    let mut worker = state.lock().await;
-                    worker.in_flight_started_at = None;
+                    let mut worker_state = state.lock().await;
+                    worker_state.in_flight_started_at = None;
                 }
+
+                worker.shutdown().await;
+                sync_worker_health(&state, worker.browser_health()).await;
             }));
+        }
+
+        drop(worker_tasks);
+        for startup_rx in startup_rxs {
+            let _ = startup_rx.await;
         }
 
         info!(
             configured_workers = self.worker_states.len(),
             queue_size = self.settings.scrape_queue_size,
+            browser_workers = self
+                .settings
+                .browser_concurrency
+                .min(self.settings.scrape_workers),
             "rust scraper executor started"
         );
 
@@ -170,12 +199,11 @@ impl ScrapeExecutor {
     }
 
     pub async fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
         let mut worker_tasks = self.worker_tasks.lock().await;
-        for task in worker_tasks.iter() {
-            task.abort();
+        for task in worker_tasks.drain(..) {
+            let _ = task.await;
         }
-        worker_tasks.clear();
-        self.runner.shutdown().await;
     }
 
     pub async fn enqueue(
@@ -220,10 +248,29 @@ impl ScrapeExecutor {
     pub fn health_payload(&self) -> HealthPayload {
         let now = Instant::now();
         let mut ages_ms = Vec::new();
+        let mut browser_workers_total = 0;
+        let mut browser_workers_ready = 0;
+        let mut browser_restarts = 0;
+        let mut last_launch_error = None;
+        let mut last_browser_error = None;
+
         for worker_state in &self.worker_states {
             if let Ok(worker) = worker_state.try_lock() {
                 if let Some(started_at) = worker.in_flight_started_at {
                     ages_ms.push(now.saturating_duration_since(started_at).as_millis() as u64);
+                }
+                if worker.browser_enabled {
+                    browser_workers_total += 1;
+                    if worker.ready {
+                        browser_workers_ready += 1;
+                    }
+                }
+                browser_restarts += worker.restart_count;
+                if worker.last_launch_error.is_some() {
+                    last_launch_error = worker.last_launch_error.clone();
+                }
+                if worker.last_browser_error.is_some() {
+                    last_browser_error = worker.last_browser_error.clone();
                 }
             }
         }
@@ -234,10 +281,8 @@ impl ScrapeExecutor {
             .iter()
             .filter(|age_ms| **age_ms > stuck_threshold_ms)
             .count();
-        let browser_health = self.runner.browser_health();
         let degraded = stuck_workers > 0
-            || (browser_health.total_workers > 0
-                && browser_health.ready_workers < browser_health.total_workers);
+            || (browser_workers_total > 0 && browser_workers_ready < browser_workers_total);
 
         HealthPayload {
             status: if degraded {
@@ -252,11 +297,11 @@ impl ScrapeExecutor {
             in_flight: ages_ms.len(),
             oldest_in_flight_ms: ages_ms.into_iter().max().unwrap_or_default(),
             stuck_workers,
-            browser_workers_total: browser_health.total_workers,
-            browser_workers_ready: browser_health.ready_workers,
-            browser_restarts: browser_health.restart_count,
-            last_launch_error: browser_health.last_launch_error,
-            last_browser_error: browser_health.last_browser_error,
+            browser_workers_total,
+            browser_workers_ready,
+            browser_restarts,
+            last_launch_error,
+            last_browser_error,
         }
     }
 
@@ -284,15 +329,27 @@ impl ScrapeExecutor {
     }
 }
 
+async fn sync_worker_health(state: &Arc<Mutex<WorkerState>>, health: BrowserHealth) {
+    let mut worker_state = state.lock().await;
+    worker_state.ready = if worker_state.browser_enabled {
+        health.ready_workers > 0
+    } else {
+        true
+    };
+    worker_state.restart_count = health.restart_count;
+    worker_state.last_launch_error = health.last_launch_error;
+    worker_state.last_browser_error = health.last_browser_error;
+}
+
 async fn process_job(
-    runner: Arc<dyn ScrapeRunner>,
+    worker: &mut dyn ScrapeWorker,
     settings: Arc<Settings>,
     worker_index: usize,
     request: &CheckRequest,
 ) -> ScrapeJobResult {
     let timed = timeout(
         Duration::from_millis(settings.scrape_job_timeout_ms),
-        runner.scrape(request),
+        worker.scrape(request),
     )
     .await;
 
@@ -319,6 +376,7 @@ async fn process_job(
         },
         Err(_) => {
             warn!(worker_index = worker_index, url = %request.url, "scrape job timed out");
+            worker.recycle_browser("scrape_job_timeout").await;
             ScrapeJobResult {
                 status_code: StatusCode::GATEWAY_TIMEOUT,
                 payload: None,
@@ -352,4 +410,10 @@ fn timeout_detail(reason: &str, url: &str, worker_index: usize) -> Value {
         "url": url,
         "worker_index": worker_index,
     })
+}
+
+fn scrape_failure_detail(failure: &ScrapeFailure) -> &str {
+    match failure {
+        ScrapeFailure::Timeout(detail) | ScrapeFailure::BrowserSession(detail) => detail,
+    }
 }

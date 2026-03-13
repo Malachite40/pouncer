@@ -4,7 +4,7 @@ use std::{
     process::{self, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -17,7 +17,6 @@ use thirtyfour::{
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStderr, Command},
-    sync::{Mutex, Semaphore},
     time::{sleep, timeout},
 };
 use tracing::{info, warn};
@@ -48,12 +47,13 @@ pub trait StaticPageFetcher: Send + Sync {
 }
 
 #[async_trait]
-pub trait DynamicPageFetcher: Send + Sync {
-    async fn start(&self) -> Result<(), FetchError>;
-    async fn shutdown(&self);
+pub trait DynamicPageFetcher: Send {
+    async fn start(&mut self) -> Result<(), FetchError>;
+    async fn shutdown(&mut self);
     fn health(&self) -> BrowserHealth;
+    async fn recycle(&mut self, reason: &str);
     async fn fetch(
-        &self,
+        &mut self,
         url: &str,
         css_selector: Option<&str>,
     ) -> Result<PageFetchOutcome, FetchError>;
@@ -126,6 +126,11 @@ trait BrowserSessionHandle: Send {
     async fn goto(&mut self, url: &str) -> Result<(), String>;
     async fn source(&mut self) -> Result<String, String>;
     async fn find(&mut self, selector: &str) -> Result<(), String>;
+    async fn current_window(&mut self) -> Result<String, String>;
+    async fn windows(&mut self) -> Result<Vec<String>, String>;
+    async fn switch_to_window(&mut self, handle: &str) -> Result<(), String>;
+    async fn close_window(&mut self) -> Result<(), String>;
+    async fn delete_all_cookies(&mut self) -> Result<(), String>;
     async fn quit(&mut self) -> Result<(), String>;
 }
 
@@ -138,74 +143,79 @@ trait BrowserEngine: Send + Sync {
     async fn create_session(
         &self,
         settings: Arc<Settings>,
-        profile_dir: SessionProfileDir,
+        profile_dir: &SessionProfileDir,
     ) -> Result<Box<dyn BrowserSessionHandle>, FetchError>;
 }
 
+#[derive(Default)]
 struct BrowserRuntime {
     child: Option<Box<dyn BrowserProcessHandle>>,
+    session: Option<Box<dyn BrowserSessionHandle>>,
+    profile_dir: Option<SessionProfileDir>,
 }
 
-impl Default for BrowserRuntime {
-    fn default() -> Self {
-        Self { child: None }
-    }
-}
-
-pub struct BrowserManager {
+pub struct BrowserWorker {
     settings: Arc<Settings>,
     engine: Arc<dyn BrowserEngine>,
-    semaphore: Semaphore,
-    state: Mutex<BrowserRuntime>,
-    restart_count: AtomicUsize,
-    last_launch_error: Mutex<Option<String>>,
-    last_browser_error: Mutex<Option<String>>,
-    session_ready: AtomicBool,
+    runtime: BrowserRuntime,
+    dynamic_enabled: bool,
+    restart_count: usize,
+    last_launch_error: Option<String>,
+    last_browser_error: Option<String>,
+    session_ready: bool,
 }
 
-impl BrowserManager {
-    pub fn new(settings: Arc<Settings>) -> Self {
-        Self::with_engine(settings, Arc::new(ChromedriverEngine::default()))
+impl BrowserWorker {
+    pub fn new(settings: Arc<Settings>, dynamic_enabled: bool) -> Self {
+        Self::with_engine(
+            settings,
+            Arc::new(ChromedriverEngine::default()),
+            dynamic_enabled,
+        )
     }
 
-    fn with_engine(settings: Arc<Settings>, engine: Arc<dyn BrowserEngine>) -> Self {
+    fn with_engine(
+        settings: Arc<Settings>,
+        engine: Arc<dyn BrowserEngine>,
+        dynamic_enabled: bool,
+    ) -> Self {
         Self {
-            semaphore: Semaphore::new(settings.browser_concurrency.max(1)),
-            state: Mutex::new(BrowserRuntime::default()),
-            restart_count: AtomicUsize::new(0),
-            last_launch_error: Mutex::new(None),
-            last_browser_error: Mutex::new(None),
-            session_ready: AtomicBool::new(true),
             settings,
             engine,
+            runtime: BrowserRuntime::default(),
+            dynamic_enabled,
+            restart_count: 0,
+            last_launch_error: None,
+            last_browser_error: None,
+            session_ready: !dynamic_enabled,
         }
     }
 
-    async fn ensure_running(&self) -> Result<bool, FetchError> {
-        if self.settings.browser_concurrency == 0 {
+    async fn ensure_browser(&mut self) -> Result<bool, FetchError> {
+        if !self.dynamic_enabled {
             return Ok(false);
         }
 
-        let mut state = self.state.lock().await;
-        let needs_spawn = match state.child.as_mut() {
-            Some(child) => child.has_exited()?,
+        let needs_spawn = match self.runtime.child.as_mut() {
+            Some(child) => child.has_exited()? || self.runtime.session.is_none(),
             None => true,
         };
 
         if !needs_spawn {
+            self.session_ready = true;
             return Ok(true);
         }
 
-        if state.child.take().is_some() {
-            self.restart_count.fetch_add(1, Ordering::SeqCst);
-        }
+        self.shutdown_runtime(None).await;
 
         let mut last_error = None;
-        for attempt in 0..=self.settings.browser_restart_attempts {
-            match self.engine.launch_process(self.settings.clone()).await {
-                Ok(child) => {
-                    state.child = Some(child);
-                    *self.last_launch_error.lock().await = None;
+        let launch_attempts = self.settings.browser_restart_attempts.max(1);
+        for attempt in 0..launch_attempts {
+            match self.launch_browser().await {
+                Ok(()) => {
+                    self.last_launch_error = None;
+                    self.last_browser_error = None;
+                    self.session_ready = true;
                     return Ok(true);
                 }
                 Err(err) => {
@@ -213,7 +223,7 @@ impl BrowserManager {
                 }
             }
 
-            if attempt < self.settings.browser_restart_attempts {
+            if attempt + 1 < launch_attempts {
                 sleep(Duration::from_millis(
                     self.settings.browser_restart_backoff_ms,
                 ))
@@ -222,83 +232,116 @@ impl BrowserManager {
         }
 
         let detail = last_error.unwrap_or_else(|| "failed to launch chromedriver".to_string());
-        *self.last_launch_error.lock().await = Some(detail.clone());
+        self.last_launch_error = Some(detail.clone());
+        self.last_browser_error = Some(detail.clone());
+        self.session_ready = false;
         Err(FetchError::BrowserSession(detail))
     }
 
-    async fn reset_browser(&self, detail: String) {
-        self.session_ready.store(false, Ordering::SeqCst);
-        *self.last_browser_error.lock().await = Some(detail.clone());
+    async fn launch_browser(&mut self) -> Result<(), FetchError> {
+        let profile_dir = SessionProfileDir::new(Path::new(CHROME_SESSION_ROOT))?;
+        let mut child = self.engine.launch_process(self.settings.clone()).await?;
 
-        let mut state = self.state.lock().await;
-        if let Some(mut child) = state.child.take() {
-            self.restart_count.fetch_add(1, Ordering::SeqCst);
+        match self
+            .engine
+            .create_session(self.settings.clone(), &profile_dir)
+            .await
+        {
+            Ok(session) => {
+                self.runtime.child = Some(child);
+                self.runtime.session = Some(session);
+                self.runtime.profile_dir = Some(profile_dir);
+                Ok(())
+            }
+            Err(err) => {
+                self.restart_count += 1;
+                self.last_browser_error = Some(fetch_error_detail(err.clone()));
+                let _ = child.kill().await;
+                cleanup_orphaned_chrome_processes().await;
+                Err(err)
+            }
+        }
+    }
+
+    async fn shutdown_runtime(&mut self, reason: Option<&str>) {
+        if reason.is_some() || self.runtime.child.is_some() || self.runtime.session.is_some() {
+            self.restart_count += 1;
+        }
+        if let Some(reason) = reason {
+            self.last_browser_error = Some(reason.to_string());
+        }
+        self.session_ready = !self.dynamic_enabled;
+
+        if let Some(mut session) = self.runtime.session.take() {
+            match timeout(
+                Duration::from_millis(self.settings.page_selector_timeout_ms),
+                session.quit(),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!(error = %err, "failed to quit webdriver session during recycle");
+                }
+                Err(_) => {
+                    warn!(
+                        timeout_ms = self.settings.page_selector_timeout_ms,
+                        "timed out quitting webdriver session during recycle"
+                    );
+                }
+            }
+        }
+
+        if let Some(mut child) = self.runtime.child.take() {
             if let Err(err) = child.kill().await {
                 warn!(error = %err, "failed to recycle chromedriver cleanly");
             }
         }
+
+        self.runtime.profile_dir.take();
         cleanup_orphaned_chrome_processes().await;
     }
 
-    async fn mark_session_recovered(&self) {
-        self.session_ready.store(true, Ordering::SeqCst);
-        *self.last_browser_error.lock().await = None;
-    }
+    async fn reset_page_state(&mut self) -> Result<(), FetchError> {
+        let session = self.runtime.session.as_mut().ok_or_else(|| {
+            FetchError::BrowserSession("browser session is not ready".to_string())
+        })?;
 
-    async fn create_session(&self) -> Result<Box<dyn BrowserSessionHandle>, FetchError> {
-        let profile_dir = SessionProfileDir::new(Path::new(CHROME_SESSION_ROOT))?;
-        self.engine
-            .create_session(self.settings.clone(), profile_dir)
+        let primary = session
+            .current_window()
             .await
-    }
-
-    async fn fetch_attempt(
-        &self,
-        url: &str,
-        css_selector: Option<&str>,
-    ) -> Result<PageFetchOutcome, FetchError> {
-        let mut session = self.create_session().await?;
-        let result = self
-            .fetch_with_session(session.as_mut(), url, css_selector)
-            .await;
-
-        match timeout(
-            Duration::from_millis(self.settings.page_selector_timeout_ms),
-            session.quit(),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                let detail = format!("failed to quit webdriver session: {err}");
-                warn!(
-                    url = %url,
-                    timeout_ms = self.settings.page_selector_timeout_ms,
-                    error = %err,
-                    "webdriver session cleanup failed; recycling chromedriver"
-                );
-                self.reset_browser(detail).await;
+            .map_err(map_browser_reset_message)?;
+        let handles = session.windows().await.map_err(map_browser_reset_message)?;
+        for handle in handles {
+            if handle == primary {
+                continue;
             }
-            Err(_) => {
-                let detail = format!(
-                    "timed out quitting webdriver session after {}ms",
-                    self.settings.page_selector_timeout_ms
-                );
-                warn!(
-                    url = %url,
-                    timeout_ms = self.settings.page_selector_timeout_ms,
-                    "webdriver session cleanup timed out; recycling chromedriver"
-                );
-                self.reset_browser(detail).await;
-            }
+            session
+                .switch_to_window(&handle)
+                .await
+                .map_err(map_browser_reset_message)?;
+            session
+                .close_window()
+                .await
+                .map_err(map_browser_reset_message)?;
         }
-
-        result
+        session
+            .switch_to_window(&primary)
+            .await
+            .map_err(map_browser_reset_message)?;
+        session
+            .goto("about:blank")
+            .await
+            .map_err(map_browser_reset_message)?;
+        session
+            .delete_all_cookies()
+            .await
+            .map_err(map_browser_reset_message)?;
+        Ok(())
     }
 
     async fn fetch_with_session(
-        &self,
-        session: &mut dyn BrowserSessionHandle,
+        &mut self,
         url: &str,
         css_selector: Option<&str>,
     ) -> Result<PageFetchOutcome, FetchError> {
@@ -307,6 +350,10 @@ impl BrowserManager {
             css_selector,
             &self.settings.dynamic_default_wait_selector,
         );
+        let session = self.runtime.session.as_mut().ok_or_else(|| {
+            FetchError::BrowserSession("browser session is not ready".to_string())
+        })?;
+
         match session.goto(url).await {
             Ok(()) => {}
             Err(err) => {
@@ -322,141 +369,92 @@ impl BrowserManager {
             }
         }
 
-        self.wait_for_page_ready(session, url, &wait_selectors)
-            .await?;
+        wait_for_page_ready(
+            session.as_mut(),
+            url,
+            &wait_selectors,
+            Duration::from_millis(self.settings.page_selector_timeout_ms),
+        )
+        .await?;
         if self.settings.dynamic_wait_ms > 0 {
             sleep(Duration::from_millis(self.settings.dynamic_wait_ms)).await;
         }
         let html = session.source().await.map_err(map_webdriver_message)?;
         Ok(PageFetchOutcome::Html(html))
     }
-
-    async fn wait_for_page_ready(
-        &self,
-        session: &mut dyn BrowserSessionHandle,
-        url: &str,
-        selectors: &[String],
-    ) -> Result<(), FetchError> {
-        let mut last_error = None;
-
-        for selector in selectors {
-            match wait_for_selector(
-                session,
-                selector,
-                Duration::from_millis(self.settings.page_selector_timeout_ms),
-            )
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(FetchError::Timeout(detail)) => {
-                    last_error = Some(detail);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-
-        Err(FetchError::Timeout(last_error.unwrap_or_else(|| {
-            format!("Timed out waiting for page readiness on {url}")
-        })))
-    }
 }
 
 #[async_trait]
-impl DynamicPageFetcher for BrowserManager {
-    async fn start(&self) -> Result<(), FetchError> {
-        if let Err(err) = self.ensure_running().await {
-            let detail = fetch_error_detail(err);
-            warn!(error = %detail, "chromedriver unavailable at startup; continuing with dynamic fallback disabled");
+impl DynamicPageFetcher for BrowserWorker {
+    async fn start(&mut self) -> Result<(), FetchError> {
+        if !self.dynamic_enabled {
+            return Ok(());
         }
-        Ok(())
+        self.ensure_browser().await.map(|_| ())
     }
 
-    async fn shutdown(&self) {
-        let mut state = self.state.lock().await;
-        if let Some(mut child) = state.child.take() {
-            if let Err(err) = child.kill().await {
-                warn!(error = %err, "failed to stop chromedriver cleanly");
-            }
-        }
-        cleanup_orphaned_chrome_processes().await;
+    async fn shutdown(&mut self) {
+        self.shutdown_runtime(None).await;
     }
 
     fn health(&self) -> BrowserHealth {
-        let total_workers = self.settings.browser_concurrency;
-        let running = self
-            .state
-            .try_lock()
-            .map(|mut state| match state.child.as_mut() {
-                Some(child) => match child.has_exited() {
-                    Ok(false) => true,
-                    Ok(true) => {
-                        state.child = None;
-                        false
-                    }
-                    Err(err) => {
-                        warn!(error = %fetch_error_detail(err), "failed to inspect chromedriver process state");
-                        state.child = None;
-                        false
-                    }
-                },
-                None => false,
-            })
-            .unwrap_or(false);
-
-        let ready_workers =
-            if total_workers > 0 && running && self.session_ready.load(Ordering::SeqCst) {
-                total_workers
-            } else {
-                0
-            };
-
         BrowserHealth {
-            total_workers,
-            ready_workers,
-            restart_count: self.restart_count.load(Ordering::SeqCst),
-            last_launch_error: self
-                .last_launch_error
-                .try_lock()
-                .ok()
-                .and_then(|detail| detail.clone()),
-            last_browser_error: self
-                .last_browser_error
-                .try_lock()
-                .ok()
-                .and_then(|detail| detail.clone()),
+            total_workers: usize::from(self.dynamic_enabled),
+            ready_workers: usize::from(
+                self.dynamic_enabled
+                    && self.session_ready
+                    && self.runtime.child.is_some()
+                    && self.runtime.session.is_some(),
+            ),
+            restart_count: self.restart_count,
+            last_launch_error: self.last_launch_error.clone(),
+            last_browser_error: self.last_browser_error.clone(),
         }
     }
 
+    async fn recycle(&mut self, reason: &str) {
+        self.shutdown_runtime(Some(reason)).await;
+    }
+
     async fn fetch(
-        &self,
+        &mut self,
         url: &str,
         css_selector: Option<&str>,
     ) -> Result<PageFetchOutcome, FetchError> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|err| FetchError::BrowserSession(err.to_string()))?;
-
         for attempt in 0..2 {
-            if !self.ensure_running().await? {
+            if !self.ensure_browser().await? {
                 return Err(FetchError::BrowserSession(
                     "dynamic browser support is disabled".to_string(),
                 ));
             }
 
-            match self.fetch_attempt(url, css_selector).await {
+            if let Err(err) = self.reset_page_state().await {
+                let detail = fetch_error_detail(err.clone());
+                warn!(
+                    attempt = attempt + 1,
+                    error = %detail,
+                    "browser state reset failed; recycling worker browser"
+                );
+                self.shutdown_runtime(Some(&detail)).await;
+                if attempt == 1 {
+                    return Err(FetchError::BrowserSession(detail));
+                }
+                continue;
+            }
+
+            match self.fetch_with_session(url, css_selector).await {
                 Ok(outcome) => {
-                    self.mark_session_recovered().await;
+                    self.last_browser_error = None;
+                    self.session_ready = true;
                     return Ok(outcome);
                 }
                 Err(FetchError::BrowserSession(detail)) => {
                     warn!(
                         attempt = attempt + 1,
                         error = %detail,
-                        "browser session failed; recycling chromedriver"
+                        "browser session failed; recycling worker browser"
                     );
-                    self.reset_browser(detail.clone()).await;
+                    self.shutdown_runtime(Some(&detail)).await;
                     if attempt == 1 {
                         return Err(FetchError::BrowserSession(detail));
                     }
@@ -568,9 +566,9 @@ impl BrowserEngine for ChromedriverEngine {
     async fn create_session(
         &self,
         settings: Arc<Settings>,
-        profile_dir: SessionProfileDir,
+        profile_dir: &SessionProfileDir,
     ) -> Result<Box<dyn BrowserSessionHandle>, FetchError> {
-        let capabilities = build_chrome_capabilities(settings.as_ref(), &profile_dir)?;
+        let capabilities = build_chrome_capabilities(settings.as_ref(), profile_dir)?;
         let driver = WebDriver::new(&settings.webdriver_url(), capabilities)
             .await
             .map_err(map_webdriver_error)?;
@@ -581,7 +579,6 @@ impl BrowserEngine for ChromedriverEngine {
 
         Ok(Box::new(RealBrowserSession {
             driver: Some(driver),
-            _profile_dir: profile_dir,
         }))
     }
 }
@@ -627,7 +624,6 @@ impl BrowserProcessHandle for TokioChildProcess {
 
 struct RealBrowserSession {
     driver: Option<WebDriver>,
-    _profile_dir: SessionProfileDir,
 }
 
 #[async_trait]
@@ -657,6 +653,58 @@ impl BrowserSessionHandle for RealBrowserSession {
             .find(thirtyfour::By::Css(selector.to_string()))
             .await
             .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    async fn current_window(&mut self) -> Result<String, String> {
+        self.driver
+            .as_ref()
+            .expect("webdriver present")
+            .window()
+            .await
+            .map(|handle| handle.to_string())
+            .map_err(|err| err.to_string())
+    }
+
+    async fn windows(&mut self) -> Result<Vec<String>, String> {
+        self.driver
+            .as_ref()
+            .expect("webdriver present")
+            .windows()
+            .await
+            .map(|handles| {
+                handles
+                    .into_iter()
+                    .map(|handle| handle.to_string())
+                    .collect()
+            })
+            .map_err(|err| err.to_string())
+    }
+
+    async fn switch_to_window(&mut self, handle: &str) -> Result<(), String> {
+        self.driver
+            .as_ref()
+            .expect("webdriver present")
+            .switch_to_window(handle.to_string().into())
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    async fn close_window(&mut self) -> Result<(), String> {
+        self.driver
+            .as_ref()
+            .expect("webdriver present")
+            .close_window()
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    async fn delete_all_cookies(&mut self) -> Result<(), String> {
+        self.driver
+            .as_ref()
+            .expect("webdriver present")
+            .delete_all_cookies()
+            .await
             .map_err(|err| err.to_string())
     }
 
@@ -761,6 +809,29 @@ async fn cleanup_orphaned_chrome_processes() {
     }
 }
 
+async fn wait_for_page_ready(
+    session: &mut dyn BrowserSessionHandle,
+    url: &str,
+    selectors: &[String],
+    timeout: Duration,
+) -> Result<(), FetchError> {
+    let mut last_error = None;
+
+    for selector in selectors {
+        match wait_for_selector(session, selector, timeout).await {
+            Ok(()) => return Ok(()),
+            Err(FetchError::Timeout(detail)) => {
+                last_error = Some(detail);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(FetchError::Timeout(last_error.unwrap_or_else(|| {
+        format!("Timed out waiting for page readiness on {url}")
+    })))
+}
+
 async fn wait_for_selector(
     session: &mut dyn BrowserSessionHandle,
     selector: &str,
@@ -805,13 +876,18 @@ fn map_webdriver_error(err: thirtyfour::error::WebDriverError) -> FetchError {
     map_webdriver_message(err.to_string())
 }
 
+fn map_browser_reset_message(message: String) -> FetchError {
+    let detail = fetch_error_detail(map_webdriver_message(message));
+    FetchError::BrowserSession(format!("browser reset failed: {detail}"))
+}
+
 fn map_webdriver_message(message: String) -> FetchError {
     let normalized = message.to_lowercase();
-    if normalized.contains("timeout") || normalized.contains("timed out") {
-        return FetchError::Timeout(format!("Page timeout: {message}"));
-    }
     if is_browser_session_message(&normalized) {
         return FetchError::BrowserSession(message);
+    }
+    if normalized.contains("timeout") || normalized.contains("timed out") {
+        return FetchError::Timeout(format!("Page timeout: {message}"));
     }
     FetchError::Unexpected(message)
 }
@@ -824,6 +900,10 @@ fn is_browser_session_message(normalized: &str) -> bool {
         || normalized.contains("chrome not reachable")
         || normalized.contains("invalid session id")
         || normalized.contains("tab crashed")
+        || normalized.contains("failed to start a thread")
+        || normalized.contains("pthread_create")
+        || normalized.contains("resource temporarily unavailable")
+        || normalized.contains("timed out receiving message from renderer")
 }
 
 fn fetch_error_detail(err: FetchError) -> String {
@@ -850,20 +930,21 @@ mod tests {
             FakeSessionPlan::CreateError(FetchError::BrowserSession(
                 "session not created".to_string(),
             )),
-            FakeSessionPlan::Html("<html><body>ok</body></html>".to_string()),
+            FakeSessionPlan::Session(FakeSessionConfig::html("<html><body>ok</body></html>")),
         ]));
-        let manager = BrowserManager::with_engine(settings, engine.clone());
+        let mut worker = BrowserWorker::with_engine(settings, engine.clone(), true);
 
-        let result = manager
+        let result = worker
             .fetch("https://example.com/product", Some("body"))
             .await
             .expect("fetch should recover");
 
         assert!(matches!(result, PageFetchOutcome::Html(_)));
         assert_eq!(engine.launch_calls(), 2);
+        assert_eq!(engine.create_session_calls(), 2);
         assert_eq!(engine.killed_processes(), vec![0]);
 
-        let health = manager.health();
+        let health = worker.health();
         assert_eq!(health.total_workers, 1);
         assert_eq!(health.ready_workers, 1);
         assert_eq!(health.restart_count, 1);
@@ -881,9 +962,9 @@ mod tests {
                 "chrome not reachable".to_string(),
             )),
         ]));
-        let manager = BrowserManager::with_engine(settings, engine.clone());
+        let mut worker = BrowserWorker::with_engine(settings, engine.clone(), true);
 
-        let err = manager
+        let err = worker
             .fetch("https://example.com/product", Some("body"))
             .await
             .expect_err("fetch should fail after one retry");
@@ -896,13 +977,141 @@ mod tests {
         assert_eq!(engine.launch_calls(), 2);
         assert_eq!(engine.killed_processes(), vec![0, 1]);
 
-        let health = manager.health();
+        let health = worker.health();
         assert_eq!(health.total_workers, 1);
         assert_eq!(health.ready_workers, 0);
         assert_eq!(health.restart_count, 2);
         assert_eq!(
             health.last_browser_error.as_deref(),
             Some("chrome not reachable")
+        );
+    }
+
+    #[tokio::test]
+    async fn reuses_browser_session_across_fetches() {
+        let settings = Arc::new(Settings::default());
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::Session(
+            FakeSessionConfig::html("<html><body>ok</body></html>"),
+        )]));
+        let mut worker = BrowserWorker::with_engine(settings, engine.clone(), true);
+
+        worker
+            .fetch("https://example.com/product-1", Some("body"))
+            .await
+            .expect("first fetch");
+        worker
+            .fetch("https://example.com/product-2", Some("body"))
+            .await
+            .expect("second fetch");
+
+        assert_eq!(engine.launch_calls(), 1);
+        assert_eq!(engine.create_session_calls(), 1);
+        let session = engine
+            .created_sessions()
+            .into_iter()
+            .next()
+            .expect("session");
+        assert_eq!(session.goto_calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn reset_page_state_closes_extra_windows_and_deletes_cookies() {
+        let settings = Arc::new(Settings::default());
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::Session(
+            FakeSessionConfig::html("<html><body>ok</body></html>")
+                .with_windows(vec!["primary", "popup"]),
+        )]));
+        let mut worker = BrowserWorker::with_engine(settings, engine.clone(), true);
+
+        worker
+            .fetch("https://example.com/product", Some("body"))
+            .await
+            .expect("fetch");
+
+        let session = engine
+            .created_sessions()
+            .into_iter()
+            .next()
+            .expect("session");
+        assert_eq!(session.delete_all_cookies_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(session.close_window_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            session.window_handles.lock().unwrap().as_slice(),
+            &["primary"]
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_timeout_returns_fetch_timeout_without_marking_browser_unready() {
+        let mut settings = Settings::default();
+        settings.page_navigation_timeout_ms = 10;
+        settings.page_selector_timeout_ms = 10;
+        let settings = Arc::new(settings);
+        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::Session(
+            FakeSessionConfig::html("<html><body>ok</body></html>").with_goto_outcomes(vec![
+                None,
+                Some("timed out navigating to https://example.com/product after 10ms"),
+            ]),
+        )]));
+        let mut worker = BrowserWorker::with_engine(settings, engine, true);
+
+        let err = worker
+            .fetch("https://example.com/product", Some("#cta"))
+            .await
+            .expect_err("fetch should time out during navigation");
+
+        let detail = match err {
+            FetchError::Timeout(detail) => detail,
+            other => panic!("unexpected fetch error: {other:?}"),
+        };
+        assert!(detail.contains("Page timeout:"));
+        assert!(detail.contains("timed out navigating to https://example.com/product"));
+
+        let health = worker.health();
+        assert_eq!(health.ready_workers, 1);
+        assert_eq!(health.restart_count, 0);
+        assert_eq!(health.last_browser_error, None);
+    }
+
+    #[tokio::test]
+    async fn renderer_timeout_recycles_browser_and_returns_browser_session() {
+        let mut settings = Settings::default();
+        settings.page_navigation_timeout_ms = 10;
+        settings.page_selector_timeout_ms = 10;
+        let settings = Arc::new(settings);
+        let engine = Arc::new(FakeBrowserEngine::new(vec![
+            FakeSessionPlan::Session(
+                FakeSessionConfig::html("<html><body>ok</body></html>").with_goto_outcomes(vec![
+                    None,
+                    Some("Timed out receiving message from renderer: 29.704"),
+                ]),
+            ),
+            FakeSessionPlan::Session(
+                FakeSessionConfig::html("<html><body>ok</body></html>").with_goto_outcomes(vec![
+                    None,
+                    Some("Timed out receiving message from renderer: 29.704"),
+                ]),
+            ),
+        ]));
+        let mut worker = BrowserWorker::with_engine(settings, engine.clone(), true);
+
+        let err = worker
+            .fetch("https://example.com/product", Some("#cta"))
+            .await
+            .expect_err("renderer timeout should be treated as fatal");
+
+        let detail = match err {
+            FetchError::BrowserSession(detail) => detail,
+            other => panic!("unexpected fetch error: {other:?}"),
+        };
+        assert!(detail.contains("Timed out receiving message from renderer"));
+        assert_eq!(engine.killed_processes(), vec![0, 1]);
+        let health = worker.health();
+        assert_eq!(health.ready_workers, 0);
+        assert_eq!(health.restart_count, 2);
+        assert_eq!(
+            health.last_browser_error.as_deref(),
+            Some("Timed out receiving message from renderer: 29.704")
         );
     }
 
@@ -921,73 +1130,6 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn navigation_timeout_returns_fetch_timeout_without_marking_browser_unready() {
-        let mut settings = Settings::default();
-        settings.page_navigation_timeout_ms = 10;
-        settings.page_selector_timeout_ms = 10;
-        let settings = Arc::new(settings);
-        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::GotoError {
-            html: "<html><body>ok</body></html>".to_string(),
-            goto_error: "timed out navigating to https://example.com/product after 10ms"
-                .to_string(),
-            quit_delay_ms: 0,
-        }]));
-        let manager = BrowserManager::with_engine(settings, engine);
-
-        let err = manager
-            .fetch("https://example.com/product", Some("#cta"))
-            .await
-            .expect_err("fetch should time out during navigation");
-
-        let detail = match err {
-            FetchError::Timeout(detail) => detail,
-            other => panic!("unexpected fetch error: {other:?}"),
-        };
-        assert!(detail.contains("Page timeout:"));
-        assert!(detail.contains("timed out navigating to https://example.com/product"));
-
-        let health = manager.health();
-        assert_eq!(health.ready_workers, 1);
-        assert_eq!(health.restart_count, 0);
-        assert_eq!(health.last_browser_error, None);
-    }
-
-    #[tokio::test]
-    async fn quit_timeout_after_navigation_timeout_recycles_browser() {
-        let mut settings = Settings::default();
-        settings.page_navigation_timeout_ms = 10;
-        settings.page_selector_timeout_ms = 10;
-        let settings = Arc::new(settings);
-        let engine = Arc::new(FakeBrowserEngine::new(vec![FakeSessionPlan::GotoError {
-            html: "<html><body>ok</body></html>".to_string(),
-            goto_error: "timed out navigating to https://example.com/product after 10ms"
-                .to_string(),
-            quit_delay_ms: 50,
-        }]));
-        let manager = BrowserManager::with_engine(settings, engine);
-
-        let err = manager
-            .fetch("https://example.com/product", Some("#cta"))
-            .await
-            .expect_err("fetch should still return the navigation timeout");
-
-        let detail = match err {
-            FetchError::Timeout(detail) => detail,
-            other => panic!("unexpected fetch error: {other:?}"),
-        };
-        assert!(detail.contains("Page timeout:"));
-        assert!(detail.contains("timed out navigating to https://example.com/product"));
-
-        let health = manager.health();
-        assert_eq!(health.ready_workers, 0);
-        assert_eq!(health.restart_count, 1);
-        assert_eq!(
-            health.last_browser_error.as_deref(),
-            Some("timed out quitting webdriver session after 10ms")
-        );
-    }
-
     struct FakeBrowserEngine {
         state: Arc<FakeBrowserEngineState>,
     }
@@ -998,8 +1140,10 @@ mod tests {
                 state: Arc::new(FakeBrowserEngineState {
                     next_process_id: AtomicUsize::new(0),
                     launch_calls: AtomicUsize::new(0),
+                    create_session_calls: AtomicUsize::new(0),
                     killed_processes: StdMutex::new(Vec::new()),
                     session_plans: StdMutex::new(session_plans.into()),
+                    created_sessions: StdMutex::new(Vec::new()),
                 }),
             }
         }
@@ -1008,16 +1152,26 @@ mod tests {
             self.state.launch_calls.load(Ordering::SeqCst)
         }
 
+        fn create_session_calls(&self) -> usize {
+            self.state.create_session_calls.load(Ordering::SeqCst)
+        }
+
         fn killed_processes(&self) -> Vec<usize> {
             self.state.killed_processes.lock().unwrap().clone()
+        }
+
+        fn created_sessions(&self) -> Vec<Arc<FakeSessionState>> {
+            self.state.created_sessions.lock().unwrap().clone()
         }
     }
 
     struct FakeBrowserEngineState {
         next_process_id: AtomicUsize,
         launch_calls: AtomicUsize,
+        create_session_calls: AtomicUsize,
         killed_processes: StdMutex<Vec<usize>>,
         session_plans: StdMutex<VecDeque<FakeSessionPlan>>,
+        created_sessions: StdMutex<Vec<Arc<FakeSessionState>>>,
     }
 
     #[async_trait]
@@ -1038,8 +1192,11 @@ mod tests {
         async fn create_session(
             &self,
             _settings: Arc<Settings>,
-            profile_dir: SessionProfileDir,
+            _profile_dir: &SessionProfileDir,
         ) -> Result<Box<dyn BrowserSessionHandle>, FetchError> {
+            self.state
+                .create_session_calls
+                .fetch_add(1, Ordering::SeqCst);
             match self
                 .state
                 .session_plans
@@ -1049,34 +1206,53 @@ mod tests {
                 .expect("session plan")
             {
                 FakeSessionPlan::CreateError(err) => Err(err),
-                FakeSessionPlan::Html(html) => Ok(Box::new(FakeSessionHandle {
-                    html,
-                    goto_error: None,
-                    quit_delay_ms: 0,
-                    _profile_dir: profile_dir,
-                })),
-                FakeSessionPlan::GotoError {
-                    html,
-                    goto_error,
-                    quit_delay_ms,
-                } => Ok(Box::new(FakeSessionHandle {
-                    html,
-                    goto_error: Some(goto_error),
-                    quit_delay_ms,
-                    _profile_dir: profile_dir,
-                })),
+                FakeSessionPlan::Session(config) => {
+                    let state = Arc::new(FakeSessionState::new(config));
+                    self.state
+                        .created_sessions
+                        .lock()
+                        .unwrap()
+                        .push(state.clone());
+                    Ok(Box::new(FakeSessionHandle { state }))
+                }
             }
         }
     }
 
     enum FakeSessionPlan {
         CreateError(FetchError),
-        Html(String),
-        GotoError {
-            html: String,
-            goto_error: String,
-            quit_delay_ms: u64,
-        },
+        Session(FakeSessionConfig),
+    }
+
+    struct FakeSessionConfig {
+        html: String,
+        goto_outcomes: VecDeque<Option<String>>,
+        quit_delay_ms: u64,
+        window_handles: Vec<String>,
+    }
+
+    impl FakeSessionConfig {
+        fn html(html: &str) -> Self {
+            Self {
+                html: html.to_string(),
+                goto_outcomes: VecDeque::new(),
+                quit_delay_ms: 0,
+                window_handles: vec!["primary".to_string()],
+            }
+        }
+
+        fn with_goto_outcomes(mut self, outcomes: Vec<Option<&str>>) -> Self {
+            self.goto_outcomes = outcomes
+                .into_iter()
+                .map(|outcome| outcome.map(str::to_string))
+                .collect();
+            self
+        }
+
+        fn with_windows(mut self, handles: Vec<&str>) -> Self {
+            self.window_handles = handles.into_iter().map(str::to_string).collect();
+            self
+        }
     }
 
     struct FakeProcessHandle {
@@ -1098,33 +1274,103 @@ mod tests {
         }
     }
 
-    struct FakeSessionHandle {
+    struct FakeSessionState {
         html: String,
-        goto_error: Option<String>,
+        goto_outcomes: StdMutex<VecDeque<Option<String>>>,
         quit_delay_ms: u64,
-        _profile_dir: SessionProfileDir,
+        window_handles: StdMutex<Vec<String>>,
+        current_window: StdMutex<String>,
+        goto_calls: AtomicUsize,
+        close_window_calls: AtomicUsize,
+        delete_all_cookies_calls: AtomicUsize,
+    }
+
+    impl FakeSessionState {
+        fn new(config: FakeSessionConfig) -> Self {
+            let current_window = config
+                .window_handles
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "primary".to_string());
+            Self {
+                html: config.html,
+                goto_outcomes: StdMutex::new(config.goto_outcomes),
+                quit_delay_ms: config.quit_delay_ms,
+                window_handles: StdMutex::new(config.window_handles),
+                current_window: StdMutex::new(current_window),
+                goto_calls: AtomicUsize::new(0),
+                close_window_calls: AtomicUsize::new(0),
+                delete_all_cookies_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    struct FakeSessionHandle {
+        state: Arc<FakeSessionState>,
     }
 
     #[async_trait]
     impl BrowserSessionHandle for FakeSessionHandle {
         async fn goto(&mut self, _url: &str) -> Result<(), String> {
-            if let Some(error) = self.goto_error.clone() {
-                return Err(error);
+            self.state.goto_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(outcome) = self.state.goto_outcomes.lock().unwrap().pop_front() {
+                if let Some(error) = outcome {
+                    return Err(error);
+                }
             }
             Ok(())
         }
 
         async fn source(&mut self) -> Result<String, String> {
-            Ok(self.html.clone())
+            Ok(self.state.html.clone())
         }
 
         async fn find(&mut self, _selector: &str) -> Result<(), String> {
             Ok(())
         }
 
+        async fn current_window(&mut self) -> Result<String, String> {
+            Ok(self.state.current_window.lock().unwrap().clone())
+        }
+
+        async fn windows(&mut self) -> Result<Vec<String>, String> {
+            Ok(self.state.window_handles.lock().unwrap().clone())
+        }
+
+        async fn switch_to_window(&mut self, handle: &str) -> Result<(), String> {
+            let handles = self.state.window_handles.lock().unwrap();
+            if !handles.iter().any(|candidate| candidate == handle) {
+                return Err("invalid session id".to_string());
+            }
+            drop(handles);
+            *self.state.current_window.lock().unwrap() = handle.to_string();
+            Ok(())
+        }
+
+        async fn close_window(&mut self) -> Result<(), String> {
+            let current = self.state.current_window.lock().unwrap().clone();
+            let mut handles = self.state.window_handles.lock().unwrap();
+            if let Some(index) = handles.iter().position(|handle| handle == &current) {
+                handles.remove(index);
+                self.state.close_window_calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(next) = handles.first() {
+                    *self.state.current_window.lock().unwrap() = next.clone();
+                }
+                return Ok(());
+            }
+            Err("invalid session id".to_string())
+        }
+
+        async fn delete_all_cookies(&mut self) -> Result<(), String> {
+            self.state
+                .delete_all_cookies_calls
+                .fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
         async fn quit(&mut self) -> Result<(), String> {
-            if self.quit_delay_ms > 0 {
-                sleep(Duration::from_millis(self.quit_delay_ms)).await;
+            if self.state.quit_delay_ms > 0 {
+                sleep(Duration::from_millis(self.state.quit_delay_ms)).await;
             }
             Ok(())
         }

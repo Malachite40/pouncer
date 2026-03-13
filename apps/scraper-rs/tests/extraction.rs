@@ -6,7 +6,7 @@ use pounce_scraper_rs::{
     config::Settings,
     models::CheckRequest,
     parsing::{extract_price_from_text, extract_stock_from_text, validate_price},
-    runner::{BrowserHealth, ScrapeRunner},
+    runner::{BrowserHealth, ScrapeWorker},
     scrape::{ProductScraper, extract_from_html, get_wait_selectors, normalize_css_selector},
     strategies::{extract_price_selectors, extract_stock_selectors, extract_title_window},
 };
@@ -29,18 +29,20 @@ struct DynamicFixtureFetcher {
 
 #[async_trait]
 impl DynamicPageFetcher for DynamicFixtureFetcher {
-    async fn start(&self) -> Result<(), FetchError> {
+    async fn start(&mut self) -> Result<(), FetchError> {
         Ok(())
     }
 
-    async fn shutdown(&self) {}
+    async fn shutdown(&mut self) {}
 
     fn health(&self) -> BrowserHealth {
         BrowserHealth::default()
     }
 
+    async fn recycle(&mut self, _reason: &str) {}
+
     async fn fetch(
-        &self,
+        &mut self,
         _url: &str,
         _css_selector: Option<&str>,
     ) -> Result<PageFetchOutcome, FetchError> {
@@ -189,7 +191,7 @@ fn wait_selector_profiles_and_normalization_match_expected_hosts() {
 #[tokio::test]
 async fn dynamic_stock_overrides_conflicting_static_stock() {
     let settings = Arc::new(Settings::default());
-    let scraper = ProductScraper::with_fetchers(
+    let mut scraper = ProductScraper::with_fetchers(
         settings,
         Arc::new(StaticFixtureFetcher {
             html: r#"
@@ -200,7 +202,7 @@ async fn dynamic_stock_overrides_conflicting_static_stock() {
             "#
             .to_string(),
         }),
-        Arc::new(DynamicFixtureFetcher {
+        Box::new(DynamicFixtureFetcher {
             outcome: PageFetchOutcome::Html(
                 r#"
                     <html><body>

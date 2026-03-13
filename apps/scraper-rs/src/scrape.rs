@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::{
     browser::{
-        BrowserManager, DynamicPageFetcher, FetchError, HttpStaticFetcher, PageFetchOutcome,
+        BrowserWorker, DynamicPageFetcher, FetchError, HttpStaticFetcher, PageFetchOutcome,
         StaticPageFetcher,
     },
     config::Settings,
@@ -14,7 +14,7 @@ use crate::{
     json_ld::extract_json_ld,
     models::{CheckRequest, CheckResponse},
     parsing::{ExtractionResult, validate_price},
-    runner::{BrowserHealth, ScrapeFailure, ScrapeRunner},
+    runner::{BrowserHealth, ScrapeFailure, ScrapeWorker, ScrapeWorkerFactory},
     strategies::{
         extract_common_selectors, extract_css_selector, extract_fingerprint, extract_meta_price,
         extract_title_window,
@@ -27,20 +27,20 @@ const SOURCE_DYNAMIC: &str = "scrapling-dynamic";
 pub struct ProductScraper {
     settings: Arc<Settings>,
     static_fetcher: Arc<dyn StaticPageFetcher>,
-    dynamic_fetcher: Arc<dyn DynamicPageFetcher>,
+    dynamic_fetcher: Box<dyn DynamicPageFetcher>,
 }
 
 impl ProductScraper {
-    pub fn new(settings: Arc<Settings>) -> Self {
+    pub fn new(settings: Arc<Settings>, dynamic_enabled: bool) -> Self {
         let static_fetcher = Arc::new(HttpStaticFetcher::new(settings.clone()));
-        let dynamic_fetcher = Arc::new(BrowserManager::new(settings.clone()));
+        let dynamic_fetcher = Box::new(BrowserWorker::new(settings.clone(), dynamic_enabled));
         Self::with_fetchers(settings, static_fetcher, dynamic_fetcher)
     }
 
     pub fn with_fetchers(
         settings: Arc<Settings>,
         static_fetcher: Arc<dyn StaticPageFetcher>,
-        dynamic_fetcher: Arc<dyn DynamicPageFetcher>,
+        dynamic_fetcher: Box<dyn DynamicPageFetcher>,
     ) -> Self {
         Self {
             settings,
@@ -49,16 +49,16 @@ impl ProductScraper {
         }
     }
 
-    async fn scrape_product(&self, request: &CheckRequest) -> Result<CheckResponse, ScrapeFailure> {
+    async fn scrape_product(
+        &mut self,
+        request: &CheckRequest,
+    ) -> Result<CheckResponse, ScrapeFailure> {
         let static_result = match self.static_fetcher.fetch(&request.url).await {
             Ok(PageFetchOutcome::Html(html)) => html,
             Ok(PageFetchOutcome::Error(error)) => return Ok(error_result(error)),
             Err(FetchError::Timeout(detail)) => return Err(ScrapeFailure::Timeout(detail)),
-            Err(FetchError::BrowserSession(detail)) => {
+            Err(FetchError::BrowserSession(detail)) | Err(FetchError::Unexpected(detail)) => {
                 return Err(ScrapeFailure::BrowserSession(detail));
-            }
-            Err(FetchError::Unexpected(detail)) => {
-                return Ok(error_result(format!("Scrape failed: {detail}")));
             }
         };
 
@@ -117,11 +117,8 @@ impl ProductScraper {
                     );
                 }
                 Err(FetchError::Timeout(detail)) => return Err(ScrapeFailure::Timeout(detail)),
-                Err(FetchError::BrowserSession(detail)) => {
+                Err(FetchError::BrowserSession(detail)) | Err(FetchError::Unexpected(detail)) => {
                     return Err(ScrapeFailure::BrowserSession(detail));
-                }
-                Err(FetchError::Unexpected(detail)) => {
-                    return Ok(error_result(format!("Scrape failed: {detail}")));
                 }
             }
         }
@@ -134,9 +131,28 @@ impl ProductScraper {
     }
 }
 
+pub struct ProductScraperFactory {
+    settings: Arc<Settings>,
+}
+
+impl ProductScraperFactory {
+    pub fn new(settings: Arc<Settings>) -> Self {
+        Self { settings }
+    }
+}
+
+impl ScrapeWorkerFactory for ProductScraperFactory {
+    fn create(&self, worker_index: usize) -> Box<dyn ScrapeWorker> {
+        Box::new(ProductScraper::new(
+            self.settings.clone(),
+            worker_index < self.settings.browser_concurrency,
+        ))
+    }
+}
+
 #[async_trait]
-impl ScrapeRunner for ProductScraper {
-    async fn start(&self) -> Result<(), ScrapeFailure> {
+impl ScrapeWorker for ProductScraper {
+    async fn start(&mut self) -> Result<(), ScrapeFailure> {
         self.dynamic_fetcher.start().await.map_err(|err| match err {
             FetchError::Timeout(detail) => ScrapeFailure::Timeout(detail),
             FetchError::BrowserSession(detail) | FetchError::Unexpected(detail) => {
@@ -145,7 +161,7 @@ impl ScrapeRunner for ProductScraper {
         })
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&mut self) {
         self.dynamic_fetcher.shutdown().await;
     }
 
@@ -153,7 +169,11 @@ impl ScrapeRunner for ProductScraper {
         self.dynamic_fetcher.health()
     }
 
-    async fn scrape(&self, request: &CheckRequest) -> Result<CheckResponse, ScrapeFailure> {
+    async fn recycle_browser(&mut self, reason: &str) {
+        self.dynamic_fetcher.recycle(reason).await;
+    }
+
+    async fn scrape(&mut self, request: &CheckRequest) -> Result<CheckResponse, ScrapeFailure> {
         self.scrape_product(request).await
     }
 }

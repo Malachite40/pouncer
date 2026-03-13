@@ -18,9 +18,14 @@ pub enum ScrapeFailure {
 }
 
 #[async_trait]
-pub trait ScrapeRunner: Send + Sync {
-    async fn start(&self) -> Result<(), ScrapeFailure>;
-    async fn shutdown(&self);
+pub trait ScrapeWorker: Send {
+    async fn start(&mut self) -> Result<(), ScrapeFailure>;
+    async fn shutdown(&mut self);
     fn browser_health(&self) -> BrowserHealth;
-    async fn scrape(&self, request: &CheckRequest) -> Result<CheckResponse, ScrapeFailure>;
+    async fn recycle_browser(&mut self, reason: &str);
+    async fn scrape(&mut self, request: &CheckRequest) -> Result<CheckResponse, ScrapeFailure>;
+}
+
+pub trait ScrapeWorkerFactory: Send + Sync {
+    fn create(&self, worker_index: usize) -> Box<dyn ScrapeWorker>;
 }

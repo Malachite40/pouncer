@@ -5,7 +5,7 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use pounce_scraper_rs::{
-    config::Settings, executor::ScrapeExecutor, http::build_router, scrape::ProductScraper,
+    config::Settings, executor::ScrapeExecutor, http::build_router, scrape::ProductScraperFactory,
 };
 
 #[tokio::main]
@@ -13,8 +13,8 @@ async fn main() {
     init_tracing();
 
     let settings = Arc::new(Settings::from_env());
-    let runner = Arc::new(ProductScraper::new(settings.clone()));
-    let executor = Arc::new(ScrapeExecutor::new(settings.clone(), runner));
+    let worker_factory = Arc::new(ProductScraperFactory::new(settings.clone()));
+    let executor = Arc::new(ScrapeExecutor::new(settings.clone(), worker_factory));
 
     executor.start().await.expect("executor failed to start");
 
