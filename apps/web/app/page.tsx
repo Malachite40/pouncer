@@ -15,7 +15,7 @@ export default async function Home() {
         return <LandingPage />;
     }
 
-    const watches = await api.watch.list();
+    const watches = await api.watch.getMany();
 
     const activeCount = watches.filter((watch) => watch.isActive).length;
     const inStockCount = watches.filter(
@@ -129,7 +129,7 @@ export default async function Home() {
                     </div>
                 </section>
 
-                <WatchList />
+                <WatchList initialWatches={watches} />
             </div>
         </HydrateClient>
     );

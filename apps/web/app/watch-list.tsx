@@ -7,7 +7,7 @@ import {
     getPriceHistoryData,
     normalizeStatus,
 } from '@/app/watch-history';
-import { api } from '@/trpc/react';
+import { type RouterOutputs, api } from '@/trpc/react';
 import { Button } from '@pounce/ui/components/button';
 import { Input } from '@pounce/ui/components/input';
 import { PriceHistoryChart } from '@pounce/ui/components/price-history-chart';
@@ -25,8 +25,10 @@ import Link from 'next/link';
 import { parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useMemo } from 'react';
 import { formatNextCheckLabel } from './watch-timing';
+import { WatchboardPriceChart } from './watchboard-price-chart';
 
 type SortKey = 'status' | 'price' | 'timing';
+type WatchboardWatch = RouterOutputs['watch']['getMany'][number];
 
 const badgePillClassName =
     'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-none tracking-[0.12em]';
@@ -67,10 +69,16 @@ function getStatusRank(status: WatchStatus, isActive: boolean) {
     return STATUS_ORDER[status] ?? 2;
 }
 
-export function WatchList() {
+export function WatchList({
+    initialWatches,
+}: {
+    initialWatches: WatchboardWatch[];
+}) {
     const { data: watches } = api.watch.getMany.useQuery(undefined, {
         staleTime: 30_000,
+        initialData: initialWatches,
     });
+    const boardWatches = watches ?? [];
 
     const sortKeys = ['status', 'price', 'timing'] as const;
     const [sortKey, setSortKey] = useQueryState(
@@ -150,7 +158,7 @@ export function WatchList() {
         }
     }
 
-    if (!watches?.length) {
+    if (!boardWatches.length) {
         return (
             <div className="rounded-lg border border-dashed border-border bg-card/96 p-8 text-center sm:p-12">
                 <div className="text-xs tracking-[0.16em] text-primary">
@@ -172,6 +180,8 @@ export function WatchList() {
 
     return (
         <section className="space-y-3">
+            <WatchboardPriceChart watches={boardWatches} />
+
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                     <div className="text-xs tracking-[0.16em] text-primary">

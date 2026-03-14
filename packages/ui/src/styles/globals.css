@@ -33,6 +33,11 @@
     --color-chart-3: oklch(0.66 0.14 152);
     --color-chart-4: oklch(0.6 0.12 24);
     --color-chart-5: oklch(0.78 0.1 58);
+    --color-chart-6: oklch(0.68 0.12 214);
+    --color-chart-7: oklch(0.71 0.11 126);
+    --color-chart-8: oklch(0.63 0.17 12);
+    --color-chart-9: oklch(0.78 0.09 94);
+    --color-chart-10: oklch(0.61 0.1 183);
     --color-sidebar: oklch(0.2 0.01 40);
     --color-sidebar-foreground: oklch(0.94 0.012 72);
     --color-sidebar-primary: oklch(0.68 0.19 43);
@@ -116,6 +121,11 @@
     --color-chart-3: oklch(0.66 0.14 152);
     --color-chart-4: oklch(0.6 0.12 24);
     --color-chart-5: oklch(0.78 0.1 58);
+    --color-chart-6: oklch(0.68 0.12 214);
+    --color-chart-7: oklch(0.71 0.11 126);
+    --color-chart-8: oklch(0.63 0.17 12);
+    --color-chart-9: oklch(0.78 0.09 94);
+    --color-chart-10: oklch(0.61 0.1 183);
     --color-sidebar: oklch(0.2 0.01 40);
     --color-sidebar-foreground: oklch(0.94 0.012 72);
     --color-sidebar-primary: oklch(0.68 0.19 43);

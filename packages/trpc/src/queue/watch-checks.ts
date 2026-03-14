@@ -182,6 +182,37 @@ export async function markWatchCheckStarted(
     return Boolean(updated);
 }
 
+export async function touchWatchCheckLease(
+    db: Database,
+    {
+        watchId,
+        userId,
+        now,
+        leaseMs,
+    }: {
+        watchId: string;
+        userId: string;
+        now: Date;
+        leaseMs: number;
+    },
+) {
+    await db
+        .update(watches)
+        .set({
+            checkLeaseExpiresAt: getLeaseExpiry(now, leaseMs),
+            updatedAt: now,
+        })
+        .where(
+            and(
+                eq(watches.id, watchId),
+                eq(watches.userId, userId),
+                isNull(watches.deletedAt),
+                isNotNull(watches.checkStartedAt),
+                gte(watches.checkLeaseExpiresAt, now),
+            ),
+        );
+}
+
 export async function completeWatchCheck(
     db: Database,
     {

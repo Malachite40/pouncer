@@ -19,5 +19,6 @@ export {
     recoverExpiredWatchClaims,
     releaseClaimsForWatches,
     releaseWatchCheckClaim,
+    touchWatchCheckLease,
 } from './queue/watch-checks';
 export type { ClaimedWatch, WatchCheckErrorType } from './queue/watch-checks';
